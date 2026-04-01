@@ -15,7 +15,7 @@ use ratatui::{DefaultTerminal, Frame};
 
 fn main() -> Result<()> {
     let terminal = ratatui::init();
-    let result = App::new()?.run(terminal);
+    let result = App::new().and_then(|app| app.run(terminal));
     ratatui::restore();
     result
 }
@@ -250,7 +250,8 @@ struct App {
     host: PaneState<HostEntry>,
     device: PaneState<DeviceEntry>,
     focus: FocusPane,
-    backend: Box<dyn DeviceBackend>,
+    backend: Option<Box<dyn DeviceBackend>>,
+    device_error: Option<String>,
     status: String,
     show_help: bool,
     last_tick: Instant,
@@ -259,10 +260,25 @@ struct App {
 impl App {
     fn new() -> Result<Self> {
         let host_cwd = std::env::current_dir().context("failed to get current directory")?;
-        let backend: Box<dyn DeviceBackend> = Box::new(MtpBackend::new()?);
         let host = PaneState::new(Self::read_host_dir(&host_cwd)?);
-        let device = PaneState::new(backend.list_current_dir()?);
-        let status = format!("Connected to {}", backend.device_name());
+
+        let (backend, device, device_error, status) = match MtpBackend::new() {
+            Ok(b) => {
+                let backend: Box<dyn DeviceBackend> = Box::new(b);
+                let entries = backend.list_current_dir()?;
+                let status = format!("Connected to {}", backend.device_name());
+                (Some(backend), PaneState::new(entries), None, status)
+            }
+            Err(e) => {
+                let msg = format!("{e:#}");
+                (
+                    None,
+                    PaneState::new(vec![]),
+                    Some(msg),
+                    "No device connected".into(),
+                )
+            }
+        };
 
         Ok(Self {
             host_cwd,
@@ -270,6 +286,7 @@ impl App {
             device,
             focus: FocusPane::Host,
             backend,
+            device_error,
             status,
             show_help: false,
             last_tick: Instant::now(),
@@ -374,14 +391,18 @@ impl App {
                 }
             }
             FocusPane::Device => {
+                let Some(backend) = &mut self.backend else {
+                    self.status = "No device connected".into();
+                    return Ok(());
+                };
                 let Some(entry) = self.device.selected().cloned() else {
                     return Ok(());
                 };
                 if entry.kind == DeviceEntryKind::Directory {
-                    self.backend.enter_dir(&entry.id)?;
-                    self.device.entries = self.backend.list_current_dir()?;
+                    backend.enter_dir(&entry.id)?;
+                    self.device.entries = backend.list_current_dir()?;
                     self.device.selected = 0;
-                    self.status = format!("Device: {}", self.backend.current_path());
+                    self.status = format!("Device: {}", backend.current_path());
                 }
             }
         }
@@ -399,10 +420,14 @@ impl App {
                 }
             }
             FocusPane::Device => {
-                self.backend.go_up()?;
-                self.device.entries = self.backend.list_current_dir()?;
+                let Some(backend) = &mut self.backend else {
+                    self.status = "No device connected".into();
+                    return Ok(());
+                };
+                backend.go_up()?;
+                self.device.entries = backend.list_current_dir()?;
                 self.device.selected = 0;
-                self.status = format!("Device: {}", self.backend.current_path());
+                self.status = format!("Device: {}", backend.current_path());
             }
         }
         Ok(())
@@ -410,13 +435,19 @@ impl App {
 
     fn refresh(&mut self) -> Result<()> {
         self.host.entries = Self::read_host_dir(&self.host_cwd)?;
-        self.backend.refresh()?;
-        self.device.entries = self.backend.list_current_dir()?;
+        if let Some(backend) = &mut self.backend {
+            backend.refresh()?;
+            self.device.entries = backend.list_current_dir()?;
+        }
         self.status = "Refreshed".into();
         Ok(())
     }
 
     fn copy_host_to_device(&mut self) -> Result<()> {
+        let Some(backend) = &mut self.backend else {
+            self.status = "No device connected".into();
+            return Ok(());
+        };
         let Some(entry) = self.host.selected() else {
             return Ok(());
         };
@@ -424,12 +455,16 @@ impl App {
             self.status = "Skipping directory push for now".into();
             return Ok(());
         }
-        self.backend.push_file(&entry.path)?;
+        backend.push_file(&entry.path)?;
         self.status = format!("Pushed {}", entry.name);
         Ok(())
     }
 
     fn copy_device_to_host(&mut self) -> Result<()> {
+        let Some(backend) = &mut self.backend else {
+            self.status = "No device connected".into();
+            return Ok(());
+        };
         let Some(entry) = self.device.selected() else {
             return Ok(());
         };
@@ -437,7 +472,7 @@ impl App {
             self.status = "Skipping directory pull for now".into();
             return Ok(());
         }
-        self.backend.pull_file(&entry.id, &self.host_cwd)?;
+        backend.pull_file(&entry.id, &self.host_cwd)?;
         self.status = format!("Pulled {}", entry.name);
         Ok(())
     }
@@ -521,11 +556,23 @@ impl App {
     }
 
     fn draw_device_pane(&self, frame: &mut Frame, area: Rect) {
-        let title = format!(
-            " {} {} ",
-            self.backend.device_name(),
-            self.backend.current_path()
-        );
+        let Some(backend) = &self.backend else {
+            let block = pane_block(
+                " Device (not connected) ".into(),
+                self.focus == FocusPane::Device,
+            );
+            let msg = self
+                .device_error
+                .as_deref()
+                .unwrap_or("No MTP device found");
+            let paragraph = Paragraph::new(msg)
+                .block(block)
+                .wrap(Wrap { trim: false });
+            frame.render_widget(paragraph, area);
+            return;
+        };
+
+        let title = format!(" {} {} ", backend.device_name(), backend.current_path());
         let block = pane_block(title, self.focus == FocusPane::Device);
         let items = self
             .device
