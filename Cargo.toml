@@ -6,4 +6,10 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0.102"
 crossterm = "0.29.0"
+mtp-rs = "0.4"
+nusb = "0.2.3"
 ratatui = "0.30.0"
+tokio = { version = "1", features = ["full"] }
+
+[dev-dependencies]
+rusb = "0.9.4"

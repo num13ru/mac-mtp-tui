@@ -1,11 +1,12 @@
 use std::cmp::Ordering;
 use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use mtp_rs::mtp::{MtpDevice, Storage};
+use mtp_rs::ptp::ObjectHandle;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -47,6 +48,7 @@ struct DeviceEntry {
     size: Option<u64>,
 }
 
+#[allow(dead_code)]
 trait DeviceBackend {
     fn device_name(&self) -> &str;
     fn current_path(&self) -> &str;
@@ -71,88 +73,135 @@ trait DeviceBackend {
     }
 }
 
-struct MockDeviceBackend {
-    device_name: String,
-    path_stack: Vec<String>,
+struct MtpBackend {
+    rt: tokio::runtime::Runtime,
+    _device: MtpDevice,
+    storage: Storage,
+    device_name_cached: String,
+    current_path_cached: String,
+    path_stack: Vec<(Option<ObjectHandle>, String)>,
 }
 
-impl MockDeviceBackend {
-    fn new() -> Self {
-        Self {
-            device_name: "Mock Kindle".to_string(),
-            path_stack: vec!["/".to_string()],
+impl MtpBackend {
+    fn new() -> Result<Self> {
+        let rt = tokio::runtime::Runtime::new().context("failed to create tokio runtime")?;
+
+        let device = rt.block_on(MtpDevice::open_first()).map_err(|e| {
+            if e.is_exclusive_access() {
+                anyhow::anyhow!(
+                    "Another process holds the USB device.\n\
+                     On macOS, ptpcamerad or Android File Transfer may auto-claim MTP devices.\n\
+                     Try: sudo killall ptpcamerad\n\
+                     Original error: {e}"
+                )
+            } else {
+                anyhow::anyhow!("Failed to open MTP device: {e}")
+            }
+        })?;
+
+        let info = device.device_info();
+        let device_name = format!("{} {}", info.manufacturer, info.model);
+
+        let storages = rt
+            .block_on(device.storages())
+            .context("failed to list device storages")?;
+        let storage = storages
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("no storage found on device"))?;
+
+        Ok(Self {
+            rt,
+            _device: device,
+            storage,
+            device_name_cached: device_name,
+            current_path_cached: "/".into(),
+            path_stack: vec![(None, "/".into())],
+        })
+    }
+
+    fn current_handle(&self) -> Option<ObjectHandle> {
+        self.path_stack.last().and_then(|(h, _)| *h)
+    }
+
+    fn rebuild_path(&mut self) {
+        if self.path_stack.len() <= 1 {
+            self.current_path_cached = "/".into();
+        } else {
+            let mut path = String::new();
+            for (_, name) in &self.path_stack[1..] {
+                path.push('/');
+                path.push_str(name);
+            }
+            self.current_path_cached = path;
         }
     }
-
-    fn current_level(&self) -> usize {
-        self.path_stack.len().saturating_sub(1)
-    }
 }
 
-impl DeviceBackend for MockDeviceBackend {
+impl DeviceBackend for MtpBackend {
     fn device_name(&self) -> &str {
-        &self.device_name
+        &self.device_name_cached
     }
 
     fn current_path(&self) -> &str {
-        self.path_stack.last().map(String::as_str).unwrap_or("/")
+        &self.current_path_cached
     }
 
     fn list_current_dir(&self) -> Result<Vec<DeviceEntry>> {
-        let level = self.current_level();
-        let entries = match level {
-            0 => vec![
+        let parent = self.current_handle();
+        let objects = self
+            .rt
+            .block_on(self.storage.list_objects(parent))
+            .context("failed to list device directory")?;
+
+        let mut entries: Vec<DeviceEntry> = objects
+            .into_iter()
+            .map(|obj| {
+                let is_dir = obj.is_folder();
                 DeviceEntry {
-                    id: "documents".into(),
-                    name: "documents".into(),
-                    kind: DeviceEntryKind::Directory,
-                    size: None,
-                },
-                DeviceEntry {
-                    id: "downloads".into(),
-                    name: "downloads".into(),
-                    kind: DeviceEntryKind::Directory,
-                    size: None,
-                },
-                DeviceEntry {
-                    id: "system".into(),
-                    name: "system".into(),
-                    kind: DeviceEntryKind::Directory,
-                    size: None,
-                },
-            ],
-            1 => vec![
-                DeviceEntry {
-                    id: "book-1".into(),
-                    name: "The Left Hand of Darkness.epub".into(),
-                    kind: DeviceEntryKind::File,
-                    size: Some(815_204),
-                },
-                DeviceEntry {
-                    id: "book-2".into(),
-                    name: "Roadside Picnic.epub".into(),
-                    kind: DeviceEntryKind::File,
-                    size: Some(1_245_009),
-                },
-            ],
-            _ => vec![],
-        };
+                    id: obj.handle.0.to_string(),
+                    size: if is_dir { None } else { Some(obj.size) },
+                    kind: if is_dir {
+                        DeviceEntryKind::Directory
+                    } else {
+                        DeviceEntryKind::File
+                    },
+                    name: obj.filename,
+                }
+            })
+            .collect();
+
+        entries.sort_by(|a, b| match (a.kind, b.kind) {
+            (DeviceEntryKind::Directory, DeviceEntryKind::File) => Ordering::Less,
+            (DeviceEntryKind::File, DeviceEntryKind::Directory) => Ordering::Greater,
+            _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+        });
 
         Ok(entries)
     }
 
     fn enter_dir(&mut self, entry_id: &str) -> Result<()> {
-        self.path_stack.push(format!(
-            "{}/{}",
-            self.current_path().trim_end_matches('/'),
-            entry_id
-        ));
+        let handle_raw: u32 = entry_id
+            .parse()
+            .with_context(|| format!("invalid object handle: {entry_id}"))?;
+
+        let entries = self.list_current_dir()?;
+        let name = entries
+            .iter()
+            .find(|e| e.id == entry_id)
+            .map(|e| e.name.clone())
+            .unwrap_or_else(|| entry_id.to_string());
+
+        self.path_stack
+            .push((Some(ObjectHandle(handle_raw)), name));
+        self.rebuild_path();
         Ok(())
     }
 
     fn go_up(&mut self) -> Result<()> {
         if self.path_stack.len() > 1 {
             self.path_stack.pop();
+            self.rebuild_path();
         }
         Ok(())
     }
@@ -210,9 +259,10 @@ struct App {
 impl App {
     fn new() -> Result<Self> {
         let host_cwd = std::env::current_dir().context("failed to get current directory")?;
-        let mut backend: Box<dyn DeviceBackend> = Box::new(MockDeviceBackend::new());
+        let backend: Box<dyn DeviceBackend> = Box::new(MtpBackend::new()?);
         let host = PaneState::new(Self::read_host_dir(&host_cwd)?);
         let device = PaneState::new(backend.list_current_dir()?);
+        let status = format!("Connected to {}", backend.device_name());
 
         Ok(Self {
             host_cwd,
@@ -220,7 +270,7 @@ impl App {
             device,
             focus: FocusPane::Host,
             backend,
-            status: "Ready".into(),
+            status,
             show_help: false,
             last_tick: Instant::now(),
         })
@@ -255,18 +305,34 @@ impl App {
             (KeyCode::Char('q'), _) => return Ok(true),
             (KeyCode::Tab, _) => self.toggle_focus(),
             (KeyCode::Char('?'), _) => self.show_help = !self.show_help,
-            (KeyCode::Char('r'), _) => self.refresh()?,
+            (KeyCode::Char('r'), _) => {
+                if let Err(e) = self.refresh() {
+                    self.status = format!("Error: {e:#}");
+                }
+            }
             (KeyCode::Up, _) | (KeyCode::Char('k'), _) => self.move_up(),
             (KeyCode::Down, _) | (KeyCode::Char('j'), _) => self.move_down(),
             (KeyCode::Enter, _) | (KeyCode::Right, _) | (KeyCode::Char('l'), _) => {
-                self.enter_selected()?
+                if let Err(e) = self.enter_selected() {
+                    self.status = format!("Error: {e:#}");
+                }
             }
             (KeyCode::Backspace, _) | (KeyCode::Left, _) | (KeyCode::Char('h'), _) => {
-                self.go_up()?
+                if let Err(e) = self.go_up() {
+                    self.status = format!("Error: {e:#}");
+                }
             }
             (KeyCode::Char('c'), KeyModifiers::CONTROL) => return Ok(true),
-            (KeyCode::Char('p'), _) => self.copy_host_to_device()?,
-            (KeyCode::Char('g'), _) => self.copy_device_to_host()?,
+            (KeyCode::Char('p'), _) => {
+                if let Err(e) = self.copy_host_to_device() {
+                    self.status = format!("Error: {e:#}");
+                }
+            }
+            (KeyCode::Char('g'), _) => {
+                if let Err(e) = self.copy_device_to_host() {
+                    self.status = format!("Error: {e:#}");
+                }
+            }
             _ => {}
         }
 
@@ -518,9 +584,6 @@ impl App {
             Line::from("App:"),
             Line::from("  ?           toggle this help"),
             Line::from("  q           quit"),
-            Line::from(""),
-            Line::from("Current build uses MockDeviceBackend."),
-            Line::from("Next step: replace it with an mtp-rs adapter."),
         ];
 
         let help = Paragraph::new(lines)
