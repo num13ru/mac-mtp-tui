@@ -1,4 +1,5 @@
 # mac-mtp-tui
+[![Rust](https://github.com/num13ru/mac-mtp-tui/actions/workflows/rust.yml/badge.svg)](https://github.com/num13ru/mac-mtp-tui/actions/workflows/rust.yml)
 
 A terminal file manager for MTP devices (Android phones, Kindle, etc.) on macOS.
 
