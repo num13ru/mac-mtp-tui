@@ -2,16 +2,24 @@
 
 Planned improvements for mac-mtp-tui, roughly ordered by priority.
 
+Items marked with **(done)** are implemented and shipped.
+
 ## Performance
 
-### Streaming directory listing with progress
+### Streaming directory listing with progress **(done)**
 
-Use `Storage::list_objects_stream()` instead of `list_objects()`. The stream
+Uses `Storage::list_objects_stream()` instead of `list_objects()`. The stream
 yields items one at a time after a single `GetObjectHandles` call, so the UI
-can show "Loading (42/500)..." while the remaining `GetObjectInfo` calls
-complete in the background.
+shows "Loading (42/500)..." while the remaining `GetObjectInfo` calls complete
+in a background thread.
 
-Impact: UI stays responsive during large listings. No change in total wall-clock time.
+### Async directory loading **(done)**
+
+Device directory listing runs on a background thread via `std::thread::spawn`.
+The backend is moved into the thread for the duration of the listing and
+returned via `mpsc` channel. The main thread stays responsive -- a braille
+spinner animates in the pane title and navigation keys are blocked until the
+listing finishes.
 
 ### Directory cache
 

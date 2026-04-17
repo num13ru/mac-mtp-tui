@@ -11,7 +11,13 @@ use crate::types::{DeviceEntry, DeviceEntryKind};
 pub trait DeviceBackend: Send {
     fn device_name(&self) -> &str;
     fn current_path(&self) -> &str;
-    fn list_current_dir(&self) -> Result<Vec<DeviceEntry>>;
+    fn list_current_dir_with_progress(
+        &self,
+        on_progress: &dyn Fn(usize, usize),
+    ) -> Result<Vec<DeviceEntry>>;
+    fn list_current_dir(&self) -> Result<Vec<DeviceEntry>> {
+        self.list_current_dir_with_progress(&|_, _| {})
+    }
     fn enter_dir(&mut self, entry_id: &str, name: &str) -> Result<()>;
     fn go_up(&mut self) -> Result<()>;
     fn refresh(&mut self) -> Result<()>;
@@ -114,29 +120,35 @@ impl DeviceBackend for MtpBackend {
         &self.current_path_cached
     }
 
-    fn list_current_dir(&self) -> Result<Vec<DeviceEntry>> {
+    fn list_current_dir_with_progress(
+        &self,
+        on_progress: &dyn Fn(usize, usize),
+    ) -> Result<Vec<DeviceEntry>> {
         let parent = self.current_handle();
-        let objects = self
+        let mut listing = self
             .rt
-            .block_on(self.storage.list_objects(parent))
+            .block_on(self.storage.list_objects_stream(parent))
             .context("failed to list device directory")?;
 
-        let mut entries: Vec<DeviceEntry> = objects
-            .into_iter()
-            .map(|obj| {
-                let is_dir = obj.is_folder();
-                DeviceEntry {
-                    id: obj.handle.0.to_string(),
-                    size: if is_dir { None } else { Some(obj.size) },
-                    kind: if is_dir {
-                        DeviceEntryKind::Directory
-                    } else {
-                        DeviceEntryKind::File
-                    },
-                    name: obj.filename,
-                }
-            })
-            .collect();
+        let total = listing.total();
+        on_progress(0, total);
+
+        let mut entries = Vec::with_capacity(total);
+        while let Some(result) = self.rt.block_on(listing.next()) {
+            let obj = result.context("failed to get object info")?;
+            let is_dir = obj.is_folder();
+            entries.push(DeviceEntry {
+                id: obj.handle.0.to_string(),
+                size: if is_dir { None } else { Some(obj.size) },
+                kind: if is_dir {
+                    DeviceEntryKind::Directory
+                } else {
+                    DeviceEntryKind::File
+                },
+                name: obj.filename,
+            });
+            on_progress(listing.fetched(), total);
+        }
 
         sort_device_entries(&mut entries);
 

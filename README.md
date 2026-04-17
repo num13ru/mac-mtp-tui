@@ -49,8 +49,12 @@ Early stage. Working:
 - Device detection and connection (including Kindle)
 - Directory browsing on both panes
 - File size display
+- Async directory loading with spinner (UI never freezes)
+- Streaming progress counter ("Loading 42/500...")
 
 Not yet implemented: file push/pull, mkdir, delete, rename.
+
+See [ROADMAP.md](ROADMAP.md) for planned improvements.
 
 ## License
 

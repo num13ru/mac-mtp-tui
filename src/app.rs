@@ -12,7 +12,13 @@ use ratatui::DefaultTerminal;
 use crate::backend::{DeviceBackend, MtpBackend};
 use crate::types::{DeviceEntry, DeviceEntryKind, FocusPane, HostEntry, PaneState};
 
-type ListingPayload = (Box<dyn DeviceBackend>, Result<Vec<DeviceEntry>>);
+enum ListingMsg {
+    Progress { fetched: usize, total: usize },
+    Done {
+        backend: Box<dyn DeviceBackend>,
+        result: Result<Vec<DeviceEntry>>,
+    },
+}
 
 pub struct App {
     pub host_cwd: PathBuf,
@@ -26,9 +32,10 @@ pub struct App {
     pub status: String,
     pub show_help: bool,
     pub device_loading: bool,
+    pub loading_progress: Option<(usize, usize)>,
     pub spinner_tick: usize,
     last_tick: Instant,
-    dir_rx: Option<mpsc::Receiver<ListingPayload>>,
+    dir_rx: Option<mpsc::Receiver<ListingMsg>>,
 }
 
 impl App {
@@ -78,6 +85,7 @@ impl App {
             status,
             show_help: false,
             device_loading: false,
+            loading_progress: None,
             spinner_tick: 0,
             last_tick: Instant::now(),
             dir_rx: None,
@@ -116,29 +124,41 @@ impl App {
 
     fn poll_device_listing(&mut self) {
         let Some(rx) = &self.dir_rx else { return };
-        let payload = match rx.try_recv() {
-            Ok(p) => p,
-            Err(mpsc::TryRecvError::Empty) => return,
-            Err(mpsc::TryRecvError::Disconnected) => {
-                self.device_loading = false;
-                self.dir_rx = None;
-                self.status = "Error: device listing thread crashed".into();
-                return;
-            }
-        };
 
-        let (backend, result) = payload;
-        self.device_name_cached = backend.device_name().to_string();
-        self.device_path_cached = backend.current_path().to_string();
-        self.backend = Some(backend);
-        self.device_loading = false;
-        self.dir_rx = None;
-        match result {
-            Ok(entries) => {
-                self.device.entries = entries;
-                self.device.selected = 0;
+        loop {
+            let msg = match rx.try_recv() {
+                Ok(m) => m,
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.device_loading = false;
+                    self.loading_progress = None;
+                    self.dir_rx = None;
+                    self.status = "Error: device listing thread crashed".into();
+                    return;
+                }
+            };
+
+            match msg {
+                ListingMsg::Progress { fetched, total } => {
+                    self.loading_progress = Some((fetched, total));
+                }
+                ListingMsg::Done { backend, result } => {
+                    self.device_name_cached = backend.device_name().to_string();
+                    self.device_path_cached = backend.current_path().to_string();
+                    self.backend = Some(backend);
+                    self.device_loading = false;
+                    self.loading_progress = None;
+                    self.dir_rx = None;
+                    match result {
+                        Ok(entries) => {
+                            self.device.entries = entries;
+                            self.device.selected = 0;
+                        }
+                        Err(e) => self.status = format!("Error: {e:#}"),
+                    }
+                    return;
+                }
             }
-            Err(e) => self.status = format!("Error: {e:#}"),
         }
     }
 
@@ -148,6 +168,7 @@ impl App {
         };
 
         self.device_loading = true;
+        self.loading_progress = None;
         self.spinner_tick = 0;
         self.device.entries.clear();
 
@@ -155,8 +176,13 @@ impl App {
         self.dir_rx = Some(rx);
 
         thread::spawn(move || {
-            let result = backend.list_current_dir();
-            tx.send((backend, result)).ok();
+            let progress_tx = tx.clone();
+            let result = backend.list_current_dir_with_progress(&|fetched, total| {
+                progress_tx
+                    .send(ListingMsg::Progress { fetched, total })
+                    .ok();
+            });
+            tx.send(ListingMsg::Done { backend, result }).ok();
         });
     }
 

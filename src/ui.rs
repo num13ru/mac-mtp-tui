@@ -90,7 +90,13 @@ impl App {
         let block = pane_block(title, self.focus == FocusPane::Device);
 
         if self.device_loading && self.device.entries.is_empty() {
-            let paragraph = Paragraph::new("Loading…")
+            let msg = match self.loading_progress {
+                Some((fetched, total)) if total > 0 => {
+                    format!("Loading ({fetched}/{total})…")
+                }
+                _ => "Loading…".into(),
+            };
+            let paragraph = Paragraph::new(msg)
                 .block(block)
                 .wrap(Wrap { trim: false });
             frame.render_widget(paragraph, area);
