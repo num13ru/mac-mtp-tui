@@ -25,6 +25,10 @@ impl App {
         self.draw_device_pane(frame, panes[1]);
         self.draw_status_bar(frame, vertical[1]);
 
+        if self.confirm_dialog.is_some() {
+            self.draw_confirm_dialog(frame);
+        }
+
         if self.show_help {
             self.draw_help(frame);
         }
@@ -153,7 +157,7 @@ impl App {
             Line::from("  Backspace   go to parent"),
             Line::from(""),
             Line::from("File actions:"),
-            Line::from("  p           push selected host file to device"),
+            Line::from("  p           push host file to device (confirms overwrite)"),
             Line::from("  g           pull selected device file to host"),
             Line::from("  r           refresh both panes"),
             Line::from(""),
@@ -166,6 +170,43 @@ impl App {
             .block(Block::default().title(" Help ").borders(Borders::ALL))
             .wrap(Wrap { trim: false });
         frame.render_widget(help, area);
+    }
+
+    fn draw_confirm_dialog(&self, frame: &mut Frame) {
+        let Some(dialog) = &self.confirm_dialog else {
+            return;
+        };
+
+        let max_width = (frame.area().width).min(60);
+        let inner_width = max_width.saturating_sub(2); // border left + right
+        let msg_len = dialog.message.len() as u16;
+        let msg_lines = if inner_width > 0 {
+            (msg_len + inner_width - 1) / inner_width
+        } else {
+            1
+        };
+        // borders top/bottom (2) + blank + message lines + blank + button line
+        let height = 2 + 1 + msg_lines + 1 + 1;
+
+        let area = centered_fixed(frame.area(), max_width, height);
+        frame.render_widget(Clear, area);
+
+        let mut lines: Vec<Line> = Vec::new();
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::raw(&dialog.message)));
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("[Y]", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw("es    "),
+            Span::styled("[N]", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw("o"),
+        ]));
+
+        let title = format!(" {} ", dialog.title);
+        let paragraph = Paragraph::new(lines)
+            .block(Block::default().title(title).borders(Borders::ALL))
+            .wrap(Wrap { trim: false });
+        frame.render_widget(paragraph, area);
     }
 }
 
@@ -194,6 +235,14 @@ pub fn format_size(bytes: u64) -> String {
     } else {
         format!("{} B", bytes)
     }
+}
+
+fn centered_fixed(area: Rect, width: u16, height: u16) -> Rect {
+    let w = width.min(area.width);
+    let h = height.min(area.height);
+    let x = area.x + (area.width.saturating_sub(w)) / 2;
+    let y = area.y + (area.height.saturating_sub(h)) / 2;
+    Rect::new(x, y, w, h)
 }
 
 fn centered_rect(area: Rect, width_percent: u16, height_percent: u16) -> Rect {

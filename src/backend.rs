@@ -1,8 +1,12 @@
 use std::cmp::Ordering;
+use std::fs;
+use std::io::Read;
+use std::ops::ControlFlow;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use mtp_rs::mtp::{MtpDevice, Storage};
+use bytes::Bytes;
+use mtp_rs::mtp::{MtpDevice, NewObjectInfo, Storage};
 use mtp_rs::ptp::ObjectHandle;
 
 use crate::types::{DeviceEntry, DeviceEntryKind};
@@ -175,6 +179,61 @@ impl DeviceBackend for MtpBackend {
     }
 
     fn refresh(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    fn push_file(&mut self, source: &Path) -> Result<()> {
+        let filename = source
+            .file_name()
+            .context("source path has no filename")?
+            .to_string_lossy()
+            .into_owned();
+        let metadata = fs::metadata(source)
+            .with_context(|| format!("failed to read metadata: {}", source.display()))?;
+        let file_size = metadata.len();
+
+        const CHUNK_SIZE: usize = 256 * 1024;
+        let mut file = std::io::BufReader::new(
+            fs::File::open(source)
+                .with_context(|| format!("failed to open: {}", source.display()))?,
+        );
+
+        let chunks: Vec<Result<Bytes, std::io::Error>> = std::iter::from_fn(move || {
+            let mut buf = vec![0u8; CHUNK_SIZE];
+            match file.read(&mut buf) {
+                Ok(0) => None,
+                Ok(n) => {
+                    buf.truncate(n);
+                    Some(Ok(Bytes::from(buf)))
+                }
+                Err(e) => Some(Err(e)),
+            }
+        })
+        .collect();
+
+        let stream = futures::stream::iter(chunks);
+        let info = NewObjectInfo::file(&filename, file_size);
+        let parent = self.current_handle();
+
+        self.rt
+            .block_on(self.storage.upload_with_progress(
+                parent,
+                info,
+                stream,
+                |_progress| ControlFlow::Continue(()),
+            ))
+            .with_context(|| format!("failed to upload {filename}"))?;
+
+        Ok(())
+    }
+
+    fn delete(&mut self, entry_id: &str) -> Result<()> {
+        let handle_raw: u32 = entry_id
+            .parse()
+            .with_context(|| format!("invalid object handle: {entry_id}"))?;
+        self.rt
+            .block_on(self.storage.delete(ObjectHandle(handle_raw)))
+            .with_context(|| format!("failed to delete object {entry_id}"))?;
         Ok(())
     }
 }

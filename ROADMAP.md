@@ -53,10 +53,13 @@ root).
 
 ## File operations
 
-### Push file (host to device)
+### Push file (host to device) **(done)**
 
-Implement `push_file` using `Storage::upload()` /
-`Storage::upload_with_progress()`. Show a progress bar in the status line.
+Uses `Storage::upload_with_progress()` to stream a host file to the device in
+256 KB chunks. If a file with the same name already exists in the current device
+directory, a modal confirmation dialog asks whether to overwrite (delete-then-
+upload, since MTP has no in-place overwrite). The device listing refreshes
+automatically after a successful push.
 
 ### Pull file (device to host)
 
@@ -100,10 +103,11 @@ pane.
 Incremental search within the current directory (`/` to start typing). Filter
 the visible list as the user types.
 
-### Confirmation dialogs
+### Confirmation dialogs **(done)**
 
-Modal confirmation for destructive operations (delete, overwrite). Escape to
-cancel, Enter to confirm.
+Reusable modal dialog (`ConfirmDialog` / `ConfirmAction`) for destructive
+operations. Y/Enter to confirm, N/Esc to cancel. Currently used for overwrite-
+on-push; designed to be extended for delete, rename, etc.
 
 ### Configurable keybindings
 

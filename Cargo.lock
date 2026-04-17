@@ -752,7 +752,9 @@ name = "mac-mtp-tui"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytes",
  "crossterm",
+ "futures",
  "mtp-rs",
  "nusb",
  "ratatui",

@@ -6,6 +6,19 @@ pub enum FocusPane {
     Device,
 }
 
+pub struct ConfirmDialog {
+    pub title: String,
+    pub message: String,
+    pub on_confirm: ConfirmAction,
+}
+
+pub enum ConfirmAction {
+    OverwritePush {
+        source: PathBuf,
+        delete_id: String,
+    },
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceEntryKind {
     Directory,

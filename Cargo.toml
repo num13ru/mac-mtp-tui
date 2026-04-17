@@ -5,7 +5,9 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.102"
+bytes = "1"
 crossterm = "0.29.0"
+futures = "0.3"
 mtp-rs = "0.12"
 nusb = "0.2.3"
 ratatui = "0.30.0"

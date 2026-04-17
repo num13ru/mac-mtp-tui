@@ -10,7 +10,9 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifier
 use ratatui::DefaultTerminal;
 
 use crate::backend::{DeviceBackend, MtpBackend};
-use crate::types::{DeviceEntry, DeviceEntryKind, FocusPane, HostEntry, PaneState};
+use crate::types::{
+    ConfirmAction, ConfirmDialog, DeviceEntry, DeviceEntryKind, FocusPane, HostEntry, PaneState,
+};
 
 enum ListingMsg {
     Progress { fetched: usize, total: usize },
@@ -31,6 +33,7 @@ pub struct App {
     pub device_path_cached: String,
     pub status: String,
     pub show_help: bool,
+    pub confirm_dialog: Option<ConfirmDialog>,
     pub device_loading: bool,
     pub loading_progress: Option<(usize, usize)>,
     pub spinner_tick: usize,
@@ -84,6 +87,7 @@ impl App {
             device_path_cached: device_path,
             status,
             show_help: false,
+            confirm_dialog: None,
             device_loading: false,
             loading_progress: None,
             spinner_tick: 0,
@@ -187,6 +191,27 @@ impl App {
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Result<bool> {
+        if let Some(dialog) = self.confirm_dialog.take() {
+            match key.code {
+                KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    match dialog.on_confirm {
+                        ConfirmAction::OverwritePush { source, delete_id } => {
+                            if let Err(e) = self.do_push_file(&source, Some(&delete_id)) {
+                                self.status = format!("Error: {e:#}");
+                            }
+                        }
+                    }
+                }
+                KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => {
+                    self.status = "Cancelled".into();
+                }
+                _ => {
+                    self.confirm_dialog = Some(dialog);
+                }
+            }
+            return Ok(false);
+        }
+
         if self.device_loading && self.focus == FocusPane::Device {
             return match (key.code, key.modifiers) {
                 (KeyCode::Char('q'), _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => Ok(true),
@@ -327,10 +352,10 @@ impl App {
     }
 
     fn copy_host_to_device(&mut self) -> Result<()> {
-        let Some(backend) = &mut self.backend else {
+        if self.backend.is_none() {
             self.status = "No device connected".into();
             return Ok(());
-        };
+        }
         let Some(entry) = self.host.selected() else {
             return Ok(());
         };
@@ -338,8 +363,46 @@ impl App {
             self.status = "Skipping directory push for now".into();
             return Ok(());
         }
-        backend.push_file(&entry.path)?;
-        self.status = format!("Pushed {}", entry.name);
+
+        let filename = &entry.name;
+        let existing = self
+            .device
+            .entries
+            .iter()
+            .find(|d| d.name == *filename && d.kind == DeviceEntryKind::File);
+
+        if let Some(existing) = existing {
+            self.confirm_dialog = Some(ConfirmDialog {
+                title: "Overwrite?".into(),
+                message: format!("\"{filename}\" already exists on device. Overwrite?"),
+                on_confirm: ConfirmAction::OverwritePush {
+                    source: entry.path.clone(),
+                    delete_id: existing.id.clone(),
+                },
+            });
+            return Ok(());
+        }
+
+        let path = entry.path.clone();
+        self.do_push_file(&path, None)
+    }
+
+    fn do_push_file(&mut self, source: &Path, delete_id: Option<&str>) -> Result<()> {
+        let backend = self.backend.as_mut().context("no device connected")?;
+        let filename = source
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+
+        if let Some(id) = delete_id {
+            self.status = format!("Deleting old {filename}...");
+            backend.delete(id)?;
+        }
+
+        self.status = format!("Pushing {filename}...");
+        backend.push_file(source)?;
+        self.status = format!("Pushed {filename}");
+        self.spawn_device_listing();
         Ok(())
     }
 
