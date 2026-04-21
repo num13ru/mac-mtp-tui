@@ -39,6 +39,7 @@ pub struct App {
     pub spinner_tick: usize,
     last_tick: Instant,
     dir_rx: Option<mpsc::Receiver<ListingMsg>>,
+    device_selected_name: Option<String>,
 }
 
 impl App {
@@ -93,6 +94,7 @@ impl App {
             spinner_tick: 0,
             last_tick: Instant::now(),
             dir_rx: None,
+            device_selected_name: None,
         })
     }
 
@@ -156,7 +158,11 @@ impl App {
                     match result {
                         Ok(entries) => {
                             self.device.entries = entries;
-                            self.device.selected = 0;
+                            self.device.restore_selection_by_name(
+                                self.device_selected_name.as_deref(),
+                                |e| &e.name,
+                            );
+                            self.device_selected_name = None;
                         }
                         Err(e) => self.status = format!("Error: {e:#}"),
                     }
@@ -167,9 +173,24 @@ impl App {
     }
 
     fn spawn_device_listing(&mut self) {
+        self.spawn_device_listing_inner(true);
+    }
+
+    fn spawn_device_listing_preserving_selection(&mut self) {
+        self.spawn_device_listing_inner(false);
+    }
+
+    fn spawn_device_listing_inner(&mut self, reset_selection: bool) {
         let Some(backend) = self.backend.take() else {
             return;
         };
+
+        if reset_selection {
+            self.device_selected_name = None;
+        } else {
+            self.device_selected_name =
+                self.device.selected().map(|e| e.name.clone());
+        }
 
         self.device_loading = true;
         self.loading_progress = None;
@@ -348,9 +369,10 @@ impl App {
     }
 
     fn refresh(&mut self) -> Result<()> {
-        self.host.entries = Self::read_host_dir(&self.host_cwd)?;
+        self.host
+            .update_entries(Self::read_host_dir(&self.host_cwd)?, |e| &e.name);
         if self.backend.is_some() {
-            self.spawn_device_listing();
+            self.spawn_device_listing_preserving_selection();
         }
         self.status = "Refreshed".into();
         Ok(())
@@ -407,7 +429,7 @@ impl App {
         self.status = format!("Pushing {filename}...");
         backend.push_file(source)?;
         self.status = format!("Pushed {filename}");
-        self.spawn_device_listing();
+        self.spawn_device_listing_preserving_selection();
         Ok(())
     }
 
@@ -445,7 +467,8 @@ impl App {
         self.status = format!("Pulling {filename}...");
         backend.pull_file(entry_id, filename, &self.host_cwd)?;
         self.status = format!("Pulled {filename}");
-        self.host.entries = Self::read_host_dir(&self.host_cwd)?;
+        self.host
+            .update_entries(Self::read_host_dir(&self.host_cwd)?, |e| &e.name);
         Ok(())
     }
 

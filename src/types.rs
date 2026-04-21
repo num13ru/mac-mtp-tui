@@ -77,4 +77,34 @@ impl<T> PaneState<T> {
     pub fn selected(&self) -> Option<&T> {
         self.entries.get(self.selected)
     }
+
+    pub fn update_entries<F>(&mut self, new_entries: Vec<T>, name_of: F)
+    where
+        F: Fn(&T) -> &str,
+    {
+        let prev_name = self.selected().map(|e| name_of(e).to_owned());
+        self.entries = new_entries;
+        self.restore_selection_by_name(prev_name.as_deref(), name_of);
+    }
+
+    pub fn restore_selection_by_name<F>(&mut self, name: Option<&str>, name_of: F)
+    where
+        F: Fn(&T) -> &str,
+    {
+        if let Some(name) = name {
+            if let Some(pos) = self.entries.iter().position(|e| name_of(e) == name) {
+                self.selected = pos;
+                return;
+            }
+        }
+        self.clamp_selected();
+    }
+
+    pub fn clamp_selected(&mut self) {
+        if self.entries.is_empty() {
+            self.selected = 0;
+        } else {
+            self.selected = self.selected.min(self.entries.len() - 1);
+        }
+    }
 }
