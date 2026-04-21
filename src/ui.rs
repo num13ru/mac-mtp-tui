@@ -29,6 +29,10 @@ impl App {
             self.draw_confirm_dialog(frame);
         }
 
+        if self.text_input_dialog.is_some() {
+            self.draw_text_input_dialog(frame);
+        }
+
         if self.show_help {
             self.draw_help(frame);
         }
@@ -137,7 +141,7 @@ impl App {
 
     fn draw_status_bar(&self, frame: &mut Frame, area: Rect) {
         let text = format!(
-            "Tab switch pane • Enter open • Backspace up • p push • g pull • r refresh • ? help • q quit    {}",
+            "Tab pane • p push • g pull • d del • m mkdir • R rename • r refresh • ? help • q quit    {}",
             self.status
         );
         frame.render_widget(Paragraph::new(text), area);
@@ -148,7 +152,6 @@ impl App {
         frame.render_widget(Clear, area);
 
         let lines = vec![
-            Line::from("mac-mtp-tui"),
             Line::from(""),
             Line::from("Navigation:"),
             Line::from("  Tab         switch active pane"),
@@ -156,13 +159,17 @@ impl App {
             Line::from("  Enter       enter directory"),
             Line::from("  Backspace   go to parent"),
             Line::from(""),
-            Line::from("File actions:"),
-            Line::from("  p           push host file to device (confirms overwrite)"),
-            Line::from("  g           pull selected device file to host"),
-            Line::from("  r           refresh both panes"),
+            Line::from("File actions (device pane):"),
+            Line::from("  p           push host file to device"),
+            Line::from("  g           pull device file to host"),
+            Line::from("  d           delete (confirms)"),
+            Line::from("  m           create directory"),
+            Line::from("  R           rename"),
             Line::from(""),
             Line::from("App:"),
+            Line::from("  r           refresh both panes"),
             Line::from("  ?           toggle this help"),
+            Line::from("  Esc         close dialog / help"),
             Line::from("  q           quit"),
         ];
 
@@ -170,6 +177,73 @@ impl App {
             .block(Block::default().title(" Help ").borders(Borders::ALL))
             .wrap(Wrap { trim: false });
         frame.render_widget(help, area);
+    }
+
+    fn draw_text_input_dialog(&self, frame: &mut Frame) {
+        let Some(dialog) = &self.text_input_dialog else {
+            return;
+        };
+
+        let max_width = (frame.area().width).min(50);
+        // borders (2) + blank + prompt + blank + input + blank + hint
+        let height: u16 = 8;
+
+        let area = centered_fixed(frame.area(), max_width, height);
+        frame.render_widget(Clear, area);
+
+        let inner_width = max_width.saturating_sub(2) as usize;
+        let display_input = if dialog.input.len() > inner_width {
+            &dialog.input[dialog.input.len() - inner_width..]
+        } else {
+            &dialog.input
+        };
+
+        let cursor_offset = if dialog.input.len() > inner_width {
+            dialog.cursor_pos.saturating_sub(dialog.input.len() - inner_width)
+        } else {
+            dialog.cursor_pos
+        };
+
+        let mut input_spans: Vec<Span> = Vec::new();
+        let before = &display_input[..cursor_offset.min(display_input.len())];
+        let after_start = cursor_offset.min(display_input.len());
+        if !before.is_empty() {
+            input_spans.push(Span::raw(before.to_string()));
+        }
+        if after_start < display_input.len() {
+            let ch = display_input[after_start..]
+                .chars()
+                .next()
+                .unwrap_or(' ');
+            input_spans.push(Span::styled(
+                ch.to_string(),
+                Style::default().add_modifier(Modifier::REVERSED),
+            ));
+            let rest_start = after_start + ch.len_utf8();
+            if rest_start < display_input.len() {
+                input_spans.push(Span::raw(display_input[rest_start..].to_string()));
+            }
+        } else {
+            input_spans.push(Span::styled(
+                " ",
+                Style::default().add_modifier(Modifier::REVERSED),
+            ));
+        }
+
+        let lines = vec![
+            Line::from(""),
+            Line::from(Span::raw(&dialog.prompt)),
+            Line::from(""),
+            Line::from(input_spans),
+            Line::from(""),
+            Line::from(Span::raw("Enter confirm • Esc cancel")),
+        ];
+
+        let title = format!(" {} ", dialog.title);
+        let paragraph = Paragraph::new(lines)
+            .block(Block::default().title(title).borders(Borders::ALL))
+            .wrap(Wrap { trim: false });
+        frame.render_widget(paragraph, area);
     }
 
     fn draw_confirm_dialog(&self, frame: &mut Frame) {

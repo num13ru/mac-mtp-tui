@@ -11,7 +11,6 @@ use mtp_rs::ptp::ObjectHandle;
 
 use crate::types::{DeviceEntry, DeviceEntryKind};
 
-#[allow(dead_code)]
 pub trait DeviceBackend: Send {
     fn device_name(&self) -> &str;
     fn current_path(&self) -> &str;
@@ -24,7 +23,6 @@ pub trait DeviceBackend: Send {
     }
     fn enter_dir(&mut self, entry_id: &str, name: &str) -> Result<()>;
     fn go_up(&mut self) -> Result<()>;
-    fn refresh(&mut self) -> Result<()>;
     fn pull_file(&mut self, _entry_id: &str, _filename: &str, _target_dir: &Path) -> Result<()> {
         anyhow::bail!("pull_file is not implemented yet")
     }
@@ -44,7 +42,7 @@ pub trait DeviceBackend: Send {
 
 pub struct MtpBackend {
     rt: tokio::runtime::Runtime,
-    _device: MtpDevice,
+    device: MtpDevice,
     storage: Storage,
     device_name_cached: String,
     current_path_cached: String,
@@ -81,7 +79,7 @@ impl MtpBackend {
 
         Ok(Self {
             rt,
-            _device: device,
+            device,
             storage,
             device_name_cached: device_name,
             current_path_cached: "/".into(),
@@ -178,10 +176,6 @@ impl DeviceBackend for MtpBackend {
         Ok(())
     }
 
-    fn refresh(&mut self) -> Result<()> {
-        Ok(())
-    }
-
     fn push_file(&mut self, source: &Path) -> Result<()> {
         let filename = source
             .file_name()
@@ -257,6 +251,14 @@ impl DeviceBackend for MtpBackend {
         Ok(())
     }
 
+    fn mkdir(&mut self, name: &str) -> Result<()> {
+        let parent = self.current_handle();
+        self.rt
+            .block_on(self.storage.create_folder(parent, name))
+            .with_context(|| format!("failed to create directory {name}"))?;
+        Ok(())
+    }
+
     fn delete(&mut self, entry_id: &str) -> Result<()> {
         let handle_raw: u32 = entry_id
             .parse()
@@ -264,6 +266,19 @@ impl DeviceBackend for MtpBackend {
         self.rt
             .block_on(self.storage.delete(ObjectHandle(handle_raw)))
             .with_context(|| format!("failed to delete object {entry_id}"))?;
+        Ok(())
+    }
+
+    fn rename(&mut self, entry_id: &str, new_name: &str) -> Result<()> {
+        if !self.device.supports_rename() {
+            anyhow::bail!("device does not support renaming");
+        }
+        let handle_raw: u32 = entry_id
+            .parse()
+            .with_context(|| format!("invalid object handle: {entry_id}"))?;
+        self.rt
+            .block_on(self.storage.rename(ObjectHandle(handle_raw), new_name))
+            .with_context(|| format!("failed to rename object {entry_id}"))?;
         Ok(())
     }
 }

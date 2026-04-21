@@ -21,6 +21,23 @@ pub enum ConfirmAction {
         entry_id: String,
         filename: String,
     },
+    Delete {
+        entry_id: String,
+        name: String,
+    },
+}
+
+pub struct TextInputDialog {
+    pub title: String,
+    pub prompt: String,
+    pub input: String,
+    pub cursor_pos: usize,
+    pub on_submit: TextInputAction,
+}
+
+pub enum TextInputAction {
+    Mkdir,
+    Rename { entry_id: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

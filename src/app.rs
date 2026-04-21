@@ -12,6 +12,7 @@ use ratatui::DefaultTerminal;
 use crate::backend::{DeviceBackend, MtpBackend};
 use crate::types::{
     ConfirmAction, ConfirmDialog, DeviceEntry, DeviceEntryKind, FocusPane, HostEntry, PaneState,
+    TextInputAction, TextInputDialog,
 };
 
 enum ListingMsg {
@@ -34,6 +35,7 @@ pub struct App {
     pub status: String,
     pub show_help: bool,
     pub confirm_dialog: Option<ConfirmDialog>,
+    pub text_input_dialog: Option<TextInputDialog>,
     pub device_loading: bool,
     pub loading_progress: Option<(usize, usize)>,
     pub spinner_tick: usize,
@@ -89,6 +91,7 @@ impl App {
             status,
             show_help: false,
             confirm_dialog: None,
+            text_input_dialog: None,
             device_loading: false,
             loading_progress: None,
             spinner_tick: 0,
@@ -212,6 +215,79 @@ impl App {
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Result<bool> {
+        if let Some(mut dialog) = self.text_input_dialog.take() {
+            match key.code {
+                KeyCode::Esc => {
+                    self.status = "Cancelled".into();
+                }
+                KeyCode::Enter => {
+                    let input = dialog.input.trim().to_string();
+                    if input.is_empty() {
+                        self.status = "Empty name, cancelled".into();
+                    } else {
+                        self.submit_text_input(dialog.on_submit, &input);
+                    }
+                }
+                KeyCode::Char(c) => {
+                    dialog.input.insert(dialog.cursor_pos, c);
+                    dialog.cursor_pos += c.len_utf8();
+                    self.text_input_dialog = Some(dialog);
+                }
+                KeyCode::Backspace => {
+                    if dialog.cursor_pos > 0 {
+                        let prev = dialog.input[..dialog.cursor_pos]
+                            .chars()
+                            .last()
+                            .map(|c| c.len_utf8())
+                            .unwrap_or(0);
+                        dialog.cursor_pos -= prev;
+                        dialog.input.remove(dialog.cursor_pos);
+                    }
+                    self.text_input_dialog = Some(dialog);
+                }
+                KeyCode::Delete => {
+                    if dialog.cursor_pos < dialog.input.len() {
+                        dialog.input.remove(dialog.cursor_pos);
+                    }
+                    self.text_input_dialog = Some(dialog);
+                }
+                KeyCode::Left => {
+                    if dialog.cursor_pos > 0 {
+                        let prev = dialog.input[..dialog.cursor_pos]
+                            .chars()
+                            .last()
+                            .map(|c| c.len_utf8())
+                            .unwrap_or(0);
+                        dialog.cursor_pos -= prev;
+                    }
+                    self.text_input_dialog = Some(dialog);
+                }
+                KeyCode::Right => {
+                    if dialog.cursor_pos < dialog.input.len() {
+                        let next = dialog.input[dialog.cursor_pos..]
+                            .chars()
+                            .next()
+                            .map(|c| c.len_utf8())
+                            .unwrap_or(0);
+                        dialog.cursor_pos += next;
+                    }
+                    self.text_input_dialog = Some(dialog);
+                }
+                KeyCode::Home => {
+                    dialog.cursor_pos = 0;
+                    self.text_input_dialog = Some(dialog);
+                }
+                KeyCode::End => {
+                    dialog.cursor_pos = dialog.input.len();
+                    self.text_input_dialog = Some(dialog);
+                }
+                _ => {
+                    self.text_input_dialog = Some(dialog);
+                }
+            }
+            return Ok(false);
+        }
+
         if let Some(dialog) = self.confirm_dialog.take() {
             match key.code {
                 KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('Y') => {
@@ -224,6 +300,18 @@ impl App {
                         ConfirmAction::OverwritePull { entry_id, filename } => {
                             if let Err(e) = self.do_pull_file(&entry_id, &filename) {
                                 self.status = format!("Error: {e:#}");
+                            }
+                        }
+                        ConfirmAction::Delete { entry_id, name } => {
+                            match self.backend.as_mut() {
+                                Some(backend) => match backend.delete(&entry_id) {
+                                    Ok(()) => {
+                                        self.status = format!("Deleted {name}");
+                                        self.spawn_device_listing_preserving_selection();
+                                    }
+                                    Err(e) => self.status = format!("Error: {e:#}"),
+                                },
+                                None => self.status = "No device connected".into(),
                             }
                         }
                     }
@@ -255,6 +343,7 @@ impl App {
 
         match (key.code, key.modifiers) {
             (KeyCode::Char('q'), _) => return Ok(true),
+            (KeyCode::Esc, _) if self.show_help => self.show_help = false,
             (KeyCode::Tab, _) => self.toggle_focus(),
             (KeyCode::Char('?'), _) => self.show_help = !self.show_help,
             (KeyCode::Char('r'), _) => {
@@ -285,6 +374,9 @@ impl App {
                     self.status = format!("Error: {e:#}");
                 }
             }
+            (KeyCode::Char('d'), _) => self.delete_selected(),
+            (KeyCode::Char('m'), _) => self.mkdir_prompt(),
+            (KeyCode::Char('R'), _) => self.rename_prompt(),
             _ => {}
         }
 
@@ -470,6 +562,96 @@ impl App {
         self.host
             .update_entries(Self::read_host_dir(&self.host_cwd)?, |e| &e.name);
         Ok(())
+    }
+
+    fn submit_text_input(&mut self, action: TextInputAction, input: &str) {
+        match action {
+            TextInputAction::Mkdir => match self.backend.as_mut() {
+                Some(backend) => match backend.mkdir(input) {
+                    Ok(()) => {
+                        self.status = format!("Created directory {input}");
+                        self.spawn_device_listing_preserving_selection();
+                    }
+                    Err(e) => self.status = format!("Error: {e:#}"),
+                },
+                None => self.status = "No device connected".into(),
+            },
+            TextInputAction::Rename { entry_id } => match self.backend.as_mut() {
+                Some(backend) => match backend.rename(&entry_id, input) {
+                    Ok(()) => {
+                        self.status = format!("Renamed to {input}");
+                        self.spawn_device_listing_preserving_selection();
+                    }
+                    Err(e) => self.status = format!("Error: {e:#}"),
+                },
+                None => self.status = "No device connected".into(),
+            },
+        }
+    }
+
+    fn rename_prompt(&mut self) {
+        if self.focus != FocusPane::Device {
+            return;
+        }
+        if self.backend.is_none() {
+            self.status = "No device connected".into();
+            return;
+        }
+        let Some(entry) = self.device.selected() else {
+            return;
+        };
+        let cursor_pos = entry.name.len();
+        self.text_input_dialog = Some(TextInputDialog {
+            title: "Rename".into(),
+            prompt: format!("Rename \"{}\" to:", entry.name),
+            input: entry.name.clone(),
+            cursor_pos,
+            on_submit: TextInputAction::Rename {
+                entry_id: entry.id.clone(),
+            },
+        });
+    }
+
+    fn mkdir_prompt(&mut self) {
+        if self.focus != FocusPane::Device {
+            return;
+        }
+        if self.backend.is_none() {
+            self.status = "No device connected".into();
+            return;
+        }
+        self.text_input_dialog = Some(TextInputDialog {
+            title: "Create Directory".into(),
+            prompt: "Directory name:".into(),
+            input: String::new(),
+            cursor_pos: 0,
+            on_submit: TextInputAction::Mkdir,
+        });
+    }
+
+    fn delete_selected(&mut self) {
+        if self.focus != FocusPane::Device {
+            return;
+        }
+        if self.backend.is_none() {
+            self.status = "No device connected".into();
+            return;
+        }
+        let Some(entry) = self.device.selected() else {
+            return;
+        };
+        let kind = match entry.kind {
+            DeviceEntryKind::Directory => "directory",
+            DeviceEntryKind::File => "file",
+        };
+        self.confirm_dialog = Some(ConfirmDialog {
+            title: "Delete?".into(),
+            message: format!("Delete {kind} \"{}\"?", entry.name),
+            on_confirm: ConfirmAction::Delete {
+                entry_id: entry.id.clone(),
+                name: entry.name.clone(),
+            },
+        });
     }
 
     fn read_host_dir(path: &Path) -> Result<Vec<HostEntry>> {
