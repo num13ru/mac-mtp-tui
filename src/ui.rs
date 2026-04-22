@@ -192,42 +192,58 @@ impl App {
         frame.render_widget(Clear, area);
 
         let inner_width = max_width.saturating_sub(2) as usize;
-        let display_input = if dialog.input.len() > inner_width {
-            &dialog.input[dialog.input.len() - inner_width..]
-        } else {
-            &dialog.input
-        };
+        let input = &dialog.input;
+        let chars: Vec<(usize, char)> = input.char_indices().collect();
+        let char_count = chars.len();
 
-        let cursor_offset = if dialog.input.len() > inner_width {
-            dialog.cursor_pos.saturating_sub(dialog.input.len() - inner_width)
+        let cursor_char = chars
+            .iter()
+            .position(|&(byte_pos, _)| byte_pos == dialog.cursor_pos)
+            .unwrap_or(char_count);
+
+        // Visible window: up to inner_width chars, kept so cursor is always in view.
+        let vis_start = if char_count <= inner_width {
+            0
+        } else if cursor_char < inner_width {
+            0
         } else {
-            dialog.cursor_pos
+            cursor_char - inner_width + 1
         };
+        let vis_end = (vis_start + inner_width).min(char_count);
+        let cursor_in_vis = cursor_char - vis_start;
+
+        let mut before = String::new();
+        let mut after = String::new();
+        let mut cursor_ch: Option<char> = None;
+
+        for (i, &(_, ch)) in chars.iter().enumerate().skip(vis_start).take(vis_end - vis_start) {
+            let rel = i - vis_start;
+            if rel < cursor_in_vis {
+                before.push(ch);
+            } else if rel == cursor_in_vis {
+                cursor_ch = Some(ch);
+            } else {
+                after.push(ch);
+            }
+        }
 
         let mut input_spans: Vec<Span> = Vec::new();
-        let before = &display_input[..cursor_offset.min(display_input.len())];
-        let after_start = cursor_offset.min(display_input.len());
         if !before.is_empty() {
-            input_spans.push(Span::raw(before.to_string()));
+            input_spans.push(Span::raw(before));
         }
-        if after_start < display_input.len() {
-            let ch = display_input[after_start..]
-                .chars()
-                .next()
-                .unwrap_or(' ');
+        if let Some(ch) = cursor_ch {
             input_spans.push(Span::styled(
                 ch.to_string(),
                 Style::default().add_modifier(Modifier::REVERSED),
             ));
-            let rest_start = after_start + ch.len_utf8();
-            if rest_start < display_input.len() {
-                input_spans.push(Span::raw(display_input[rest_start..].to_string()));
-            }
         } else {
             input_spans.push(Span::styled(
                 " ",
                 Style::default().add_modifier(Modifier::REVERSED),
             ));
+        }
+        if !after.is_empty() {
+            input_spans.push(Span::raw(after));
         }
 
         let lines = vec![
