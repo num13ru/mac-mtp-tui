@@ -25,6 +25,7 @@ pub enum ConfirmAction {
         entry_id: String,
         name: String,
     },
+    Quit,
 }
 
 pub struct TextInputDialog {

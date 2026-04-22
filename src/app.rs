@@ -39,6 +39,7 @@ pub struct App {
     pub device_loading: bool,
     pub loading_progress: Option<(usize, usize)>,
     pub spinner_tick: usize,
+    should_quit: bool,
     last_tick: Instant,
     dir_rx: Option<mpsc::Receiver<ListingMsg>>,
     device_selected_name: Option<String>,
@@ -95,6 +96,7 @@ impl App {
             device_loading: false,
             loading_progress: None,
             spinner_tick: 0,
+            should_quit: false,
             last_tick: Instant::now(),
             dir_rx: None,
             device_selected_name: None,
@@ -109,12 +111,14 @@ impl App {
             if event::poll(timeout)? {
                 match event::read()? {
                     Event::Key(key) if key.kind == KeyEventKind::Press => {
-                        if self.handle_key(key)? {
-                            break;
-                        }
+                        self.handle_key(key)?;
                     }
                     _ => {}
                 }
+            }
+
+            if self.should_quit {
+                break;
             }
 
             self.poll_device_listing();
@@ -214,7 +218,7 @@ impl App {
         });
     }
 
-    fn handle_key(&mut self, key: KeyEvent) -> Result<bool> {
+    fn handle_key(&mut self, key: KeyEvent) -> Result<()> {
         if let Some(mut dialog) = self.text_input_dialog.take() {
             match key.code {
                 KeyCode::Esc => {
@@ -285,7 +289,7 @@ impl App {
                     self.text_input_dialog = Some(dialog);
                 }
             }
-            return Ok(false);
+            return Ok(());
         }
 
         if let Some(dialog) = self.confirm_dialog.take() {
@@ -314,6 +318,9 @@ impl App {
                                 None => self.status = "No device connected".into(),
                             }
                         }
+                        ConfirmAction::Quit => {
+                            self.should_quit = true;
+                        }
                     }
                 }
                 KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => {
@@ -323,26 +330,22 @@ impl App {
                     self.confirm_dialog = Some(dialog);
                 }
             }
-            return Ok(false);
+            return Ok(());
         }
 
         if self.device_loading && self.focus == FocusPane::Device {
-            return match (key.code, key.modifiers) {
-                (KeyCode::Char('q'), _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => Ok(true),
-                (KeyCode::Tab, _) => {
-                    self.toggle_focus();
-                    Ok(false)
-                }
-                (KeyCode::Char('?'), _) => {
-                    self.show_help = !self.show_help;
-                    Ok(false)
-                }
-                _ => Ok(false),
-            };
+            match (key.code, key.modifiers) {
+                (KeyCode::Char('q'), _) => self.confirm_quit(),
+                (KeyCode::Char('c'), KeyModifiers::CONTROL) => self.should_quit = true,
+                (KeyCode::Tab, _) => self.toggle_focus(),
+                (KeyCode::Char('?'), _) => self.show_help = !self.show_help,
+                _ => {}
+            }
+            return Ok(());
         }
 
         match (key.code, key.modifiers) {
-            (KeyCode::Char('q'), _) => return Ok(true),
+            (KeyCode::Char('q'), _) => self.confirm_quit(),
             (KeyCode::Esc, _) if self.show_help => self.show_help = false,
             (KeyCode::Tab, _) => self.toggle_focus(),
             (KeyCode::Char('?'), _) => self.show_help = !self.show_help,
@@ -363,7 +366,7 @@ impl App {
                     self.status = format!("Error: {e:#}");
                 }
             }
-            (KeyCode::Char('c'), KeyModifiers::CONTROL) => return Ok(true),
+            (KeyCode::Char('c'), KeyModifiers::CONTROL) => self.should_quit = true,
             (KeyCode::Char('p'), _) => {
                 if let Err(e) = self.copy_host_to_device() {
                     self.status = format!("Error: {e:#}");
@@ -380,7 +383,7 @@ impl App {
             _ => {}
         }
 
-        Ok(false)
+        Ok(())
     }
 
     fn toggle_focus(&mut self) {
@@ -587,6 +590,14 @@ impl App {
                 None => self.status = "No device connected".into(),
             },
         }
+    }
+
+    fn confirm_quit(&mut self) {
+        self.confirm_dialog = Some(ConfirmDialog {
+            title: "Quit?".into(),
+            message: "Are you sure you want to quit?".into(),
+            on_confirm: ConfirmAction::Quit,
+        });
     }
 
     fn rename_prompt(&mut self) {
