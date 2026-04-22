@@ -33,6 +33,14 @@ impl App {
             self.draw_text_input_dialog(frame);
         }
 
+        if self.info_dialog.is_some() {
+            self.draw_info_dialog(frame);
+        }
+
+        if self.inspector.is_some() {
+            self.draw_inspector(frame);
+        }
+
         if self.show_help {
             self.draw_help(frame);
         }
@@ -148,7 +156,7 @@ impl App {
 
     fn draw_status_bar(&self, frame: &mut Frame, area: Rect) {
         let text = format!(
-            "Tab pane • p push • g pull • d del • m mkdir • R rename • r refresh • ? help • q quit    {}",
+            "Tab pane • i inspect • p push • g pull • d del • m mkdir • R rename • r refresh • ? help • q quit    {}",
             self.status
         );
         frame.render_widget(Paragraph::new(text), area);
@@ -167,6 +175,7 @@ impl App {
             Line::from("  Backspace   go to parent"),
             Line::from(""),
             Line::from("File actions (device pane):"),
+            Line::from("  i           inspect object metadata"),
             Line::from("  p           push host file to device"),
             Line::from("  g           pull device file to host"),
             Line::from("  d           delete (confirms)"),
@@ -184,6 +193,112 @@ impl App {
             .block(Block::default().title(" Help ").borders(Borders::ALL))
             .wrap(Wrap { trim: false });
         frame.render_widget(help, area);
+    }
+
+    fn draw_inspector(&self, frame: &mut Frame) {
+        let Some(data) = &self.inspector else {
+            return;
+        };
+
+        let area = centered_rect(frame.area(), 75, 85);
+        frame.render_widget(Clear, area);
+
+        let dim = Style::default().add_modifier(Modifier::DIM);
+        let bold = Style::default().add_modifier(Modifier::BOLD);
+
+        let mut lines: Vec<Line> = Vec::new();
+
+        lines.push(Line::from(Span::styled("--- ObjectInfo ---", bold)));
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("  Handle:      ", dim),
+            Span::raw(&data.object_handle),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("  Filename:    ", dim),
+            Span::raw(&data.filename),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("  Format:      ", dim),
+            Span::raw(&data.format),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("  Size:        ", dim),
+            Span::raw(&data.size),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("  Storage:     ", dim),
+            Span::raw(&data.storage_id),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("  Parent:      ", dim),
+            Span::raw(&data.parent_id),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("  Protection:  ", dim),
+            Span::raw(&data.protection),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("  Created:     ", dim),
+            Span::raw(data.created.as_deref().unwrap_or("(none)")),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("  Modified:    ", dim),
+            Span::raw(data.modified.as_deref().unwrap_or("(none)")),
+        ]));
+        if !data.keywords.is_empty() {
+            lines.push(Line::from(vec![
+                Span::styled("  Keywords:    ", dim),
+                Span::raw(&data.keywords),
+            ]));
+        }
+        if let Some(ref dims) = data.image_dimensions {
+            lines.push(Line::from(vec![
+                Span::styled("  Image dims:  ", dim),
+                Span::raw(dims),
+            ]));
+        }
+        if let Some(ref thumb) = data.thumb_dimensions {
+            lines.push(Line::from(vec![
+                Span::styled("  Thumbnail:   ", dim),
+                Span::raw(thumb),
+            ]));
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "--- MTP Properties (GetObjectPropValue) ---",
+            bold,
+        )));
+        lines.push(Line::from(""));
+
+        for prop in &data.properties {
+            let label = format!("  0x{:04X} {:<20} ", prop.code, prop.name);
+            let style = if prop.is_error { dim } else { Style::default() };
+            let prefix = if prop.is_error { "ERR " } else { "" };
+            lines.push(Line::from(vec![
+                Span::styled(label, dim),
+                Span::styled(format!("{prefix}{}", prop.value), style),
+            ]));
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  j/k scroll • Esc/i/q close",
+            dim,
+        )));
+
+        let total_lines = lines.len();
+        let inner_height = area.height.saturating_sub(2) as usize;
+        let max_offset = total_lines.saturating_sub(inner_height);
+        let offset = data.scroll_offset.min(max_offset);
+
+        let visible: Vec<Line> = lines.into_iter().skip(offset).take(inner_height).collect();
+
+        let title = format!(" Inspector: {} ", data.filename);
+        let paragraph = Paragraph::new(visible)
+            .block(Block::default().title(title).borders(Borders::ALL));
+        frame.render_widget(paragraph, area);
     }
 
     fn draw_text_input_dialog(&self, frame: &mut Frame) {
@@ -261,6 +376,47 @@ impl App {
             Line::from(""),
             Line::from(Span::raw("Enter confirm • Esc cancel")),
         ];
+
+        let title = format!(" {} ", dialog.title);
+        let paragraph = Paragraph::new(lines)
+            .block(Block::default().title(title).borders(Borders::ALL))
+            .wrap(Wrap { trim: false });
+        frame.render_widget(paragraph, area);
+    }
+
+    fn draw_info_dialog(&self, frame: &mut Frame) {
+        let Some(dialog) = &self.info_dialog else {
+            return;
+        };
+
+        let max_width = (frame.area().width).min(55);
+        let inner_width = max_width.saturating_sub(2);
+        let msg_lines: u16 = dialog
+            .message
+            .lines()
+            .map(|line| {
+                if inner_width > 0 {
+                    ((line.len() as u16) + inner_width - 1) / inner_width
+                } else {
+                    1
+                }
+                .max(1)
+            })
+            .sum();
+        let height = 2 + 1 + msg_lines + 1 + 1;
+
+        let area = centered_fixed(frame.area(), max_width, height);
+        frame.render_widget(Clear, area);
+
+        let mut lines: Vec<Line> = vec![Line::from("")];
+        for text_line in dialog.message.lines() {
+            lines.push(Line::from(Span::raw(text_line)));
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "Press any key to close",
+            Style::default().add_modifier(Modifier::DIM),
+        )));
 
         let title = format!(" {} ", dialog.title);
         let paragraph = Paragraph::new(lines)

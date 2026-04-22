@@ -11,8 +11,8 @@ use ratatui::DefaultTerminal;
 
 use crate::backend::{DeviceBackend, MtpBackend};
 use crate::types::{
-    ConfirmAction, ConfirmDialog, DeviceEntry, DeviceEntryKind, FocusPane, HostEntry, PaneState,
-    TextInputAction, TextInputDialog,
+    ConfirmAction, ConfirmDialog, DeviceEntry, DeviceEntryKind, FocusPane, HostEntry, InfoDialog,
+    InspectorData, PaneState, TextInputAction, TextInputDialog,
 };
 
 enum ListingMsg {
@@ -37,6 +37,8 @@ pub struct App {
     pub show_help: bool,
     pub confirm_dialog: Option<ConfirmDialog>,
     pub text_input_dialog: Option<TextInputDialog>,
+    pub info_dialog: Option<InfoDialog>,
+    pub inspector: Option<InspectorData>,
     pub device_loading: bool,
     pub device_connecting: bool,
     pub loading_progress: Option<(usize, usize)>,
@@ -86,6 +88,8 @@ impl App {
             show_help: false,
             confirm_dialog: None,
             text_input_dialog: None,
+            info_dialog: None,
+            inspector: None,
             device_loading: true,
             device_connecting: true,
             loading_progress: None,
@@ -227,6 +231,31 @@ impl App {
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Result<()> {
+        if self.inspector.is_some() {
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('i') | KeyCode::Char('q') => {
+                    self.inspector = None;
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if let Some(ref mut data) = self.inspector {
+                        data.scroll_offset = data.scroll_offset.saturating_add(1);
+                    }
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    if let Some(ref mut data) = self.inspector {
+                        data.scroll_offset = data.scroll_offset.saturating_sub(1);
+                    }
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
+
+        if self.info_dialog.is_some() {
+            self.info_dialog = None;
+            return Ok(());
+        }
+
         if let Some(mut dialog) = self.text_input_dialog.take() {
             match key.code {
                 KeyCode::Esc => {
@@ -388,6 +417,7 @@ impl App {
             (KeyCode::Char('d'), _) => self.delete_selected(),
             (KeyCode::Char('m'), _) => self.mkdir_prompt(),
             (KeyCode::Char('R'), _) => self.rename_prompt(),
+            (KeyCode::Char('i'), _) => self.open_inspector(),
             _ => {}
         }
 
@@ -671,6 +701,37 @@ impl App {
                 name: entry.name.clone(),
             },
         });
+    }
+
+    fn open_inspector(&mut self) {
+        if self.focus != FocusPane::Device {
+            self.info_dialog = Some(InfoDialog {
+                title: "Inspector".into(),
+                message: "Inspector is only available for device files (MTP objects).\n\
+                          Switch to the device pane with Tab first."
+                    .into(),
+            });
+            return;
+        }
+        let Some(backend) = &self.backend else {
+            self.status = "No device connected".into();
+            return;
+        };
+        let Some(entry) = self.device.selected() else {
+            return;
+        };
+        let entry_id = entry.id.clone();
+        let entry_name = entry.name.clone();
+        self.status = format!("Inspecting {entry_name}...");
+        match backend.inspect_object(&entry_id) {
+            Ok(data) => {
+                self.status = format!("Inspector: {entry_name}");
+                self.inspector = Some(data);
+            }
+            Err(e) => {
+                self.status = format!("Error: {e:#}");
+            }
+        }
     }
 
     fn read_host_dir(path: &Path) -> Result<Vec<HostEntry>> {

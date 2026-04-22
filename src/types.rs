@@ -6,6 +6,11 @@ pub enum FocusPane {
     Device,
 }
 
+pub struct InfoDialog {
+    pub title: String,
+    pub message: String,
+}
+
 pub struct ConfirmDialog {
     pub title: String,
     pub message: String,
@@ -61,6 +66,30 @@ pub struct DeviceEntry {
     pub name: String,
     pub kind: DeviceEntryKind,
     pub size: Option<u64>,
+}
+
+pub struct InspectorProperty {
+    pub code: u16,
+    pub name: String,
+    pub value: String,
+    pub is_error: bool,
+}
+
+pub struct InspectorData {
+    pub object_handle: String,
+    pub filename: String,
+    pub format: String,
+    pub size: String,
+    pub storage_id: String,
+    pub parent_id: String,
+    pub protection: String,
+    pub created: Option<String>,
+    pub modified: Option<String>,
+    pub keywords: String,
+    pub image_dimensions: Option<String>,
+    pub thumb_dimensions: Option<String>,
+    pub properties: Vec<InspectorProperty>,
+    pub scroll_offset: usize,
 }
 
 pub struct PaneState<T> {

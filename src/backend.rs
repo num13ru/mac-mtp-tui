@@ -7,9 +7,13 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use mtp_rs::mtp::{MtpDevice, NewObjectInfo, Storage};
-use mtp_rs::ptp::ObjectHandle;
+use mtp_rs::ptp::{
+    ObjectFormatCode, ObjectHandle, ObjectPropertyCode, unpack_string, unpack_u16, unpack_u32,
+    unpack_u64,
+};
 
-use crate::types::{DeviceEntry, DeviceEntryKind};
+use crate::types::{DeviceEntry, DeviceEntryKind, InspectorData, InspectorProperty};
+use crate::ui::format_size;
 
 pub trait DeviceBackend: Send {
     fn device_name(&self) -> &str;
@@ -37,6 +41,9 @@ pub trait DeviceBackend: Send {
     }
     fn rename(&mut self, _entry_id: &str, _new_name: &str) -> Result<()> {
         anyhow::bail!("rename is not implemented yet")
+    }
+    fn inspect_object(&self, _entry_id: &str) -> Result<InspectorData> {
+        anyhow::bail!("inspect_object is not implemented yet")
     }
 }
 
@@ -112,6 +119,111 @@ pub fn sort_device_entries(entries: &mut Vec<DeviceEntry>) {
         (DeviceEntryKind::File, DeviceEntryKind::Directory) => Ordering::Greater,
         _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
     });
+}
+
+// TODO(mtp-rs 0x9801): replace with GetObjectPropsSupported to discover properties
+// dynamically per format instead of hardcoding. See MTP_RS_GAPS.md patch #1.
+const INSPECTOR_PROPERTIES: &[ObjectPropertyCode] = &[
+    ObjectPropertyCode::StorageId,
+    ObjectPropertyCode::ObjectFormat,
+    ObjectPropertyCode::ProtectionStatus,
+    ObjectPropertyCode::ObjectSize,
+    ObjectPropertyCode::ObjectFileName,
+    ObjectPropertyCode::DateCreated,
+    ObjectPropertyCode::DateModified,
+    ObjectPropertyCode::ParentObject,
+    ObjectPropertyCode::Name,
+];
+
+fn prop_name(code: ObjectPropertyCode) -> String {
+    match code {
+        ObjectPropertyCode::StorageId => "StorageId".into(),
+        ObjectPropertyCode::ObjectFormat => "ObjectFormat".into(),
+        ObjectPropertyCode::ProtectionStatus => "ProtectionStatus".into(),
+        ObjectPropertyCode::ObjectSize => "ObjectSize".into(),
+        ObjectPropertyCode::ObjectFileName => "ObjectFileName".into(),
+        ObjectPropertyCode::DateCreated => "DateCreated".into(),
+        ObjectPropertyCode::DateModified => "DateModified".into(),
+        ObjectPropertyCode::ParentObject => "ParentObject".into(),
+        ObjectPropertyCode::Name => "Name".into(),
+        ObjectPropertyCode::Unknown(c) => format!("0x{c:04X}"),
+    }
+}
+
+// TODO(mtp-rs 0x9802): use GetObjectPropDesc to get the declared data type per
+// property instead of hardcoding the type map here. See MTP_RS_GAPS.md patch #2.
+fn decode_prop_value(code: ObjectPropertyCode, bytes: &[u8]) -> String {
+    match code {
+        ObjectPropertyCode::ObjectSize => unpack_u64(bytes)
+            .map(|v| format!("{} ({v} bytes)", format_size(v)))
+            .unwrap_or_else(|_| hex_dump(bytes)),
+        ObjectPropertyCode::ObjectFormat | ObjectPropertyCode::ProtectionStatus => {
+            unpack_u16(bytes)
+                .map(|v| format!("0x{v:04X}"))
+                .unwrap_or_else(|_| hex_dump(bytes))
+        }
+        ObjectPropertyCode::StorageId | ObjectPropertyCode::ParentObject => unpack_u32(bytes)
+            .map(|v| format!("0x{v:08X}"))
+            .unwrap_or_else(|_| hex_dump(bytes)),
+        ObjectPropertyCode::ObjectFileName
+        | ObjectPropertyCode::DateCreated
+        | ObjectPropertyCode::DateModified
+        | ObjectPropertyCode::Name => unpack_string(bytes)
+            .map(|(s, _)| {
+                if s.is_empty() {
+                    "(empty)".into()
+                } else {
+                    s
+                }
+            })
+            .unwrap_or_else(|_| hex_dump(bytes)),
+        ObjectPropertyCode::Unknown(_) => hex_dump(bytes),
+    }
+}
+
+fn hex_dump(bytes: &[u8]) -> String {
+    if bytes.is_empty() {
+        return "(empty)".into();
+    }
+    let display: Vec<String> = bytes.iter().take(32).map(|b| format!("{b:02X}")).collect();
+    let suffix = if bytes.len() > 32 {
+        format!("... ({} bytes total)", bytes.len())
+    } else {
+        String::new()
+    };
+    format!("{}{suffix}", display.join(" "))
+}
+
+fn format_object_format(code: ObjectFormatCode) -> String {
+    match code {
+        ObjectFormatCode::Undefined => "Undefined (0x3000)".into(),
+        ObjectFormatCode::Association => "Association/Folder (0x3001)".into(),
+        ObjectFormatCode::Text => "Text (0x3004)".into(),
+        ObjectFormatCode::Html => "HTML (0x3005)".into(),
+        ObjectFormatCode::Jpeg => "JPEG (0x3801)".into(),
+        ObjectFormatCode::Png => "PNG (0x380B)".into(),
+        ObjectFormatCode::Gif => "GIF (0x3807)".into(),
+        ObjectFormatCode::Tiff => "TIFF (0x3804)".into(),
+        ObjectFormatCode::Bmp => "BMP (0x3808)".into(),
+        ObjectFormatCode::Mp3 => "MP3 (0x3009)".into(),
+        ObjectFormatCode::Wav => "WAV (0x3008)".into(),
+        ObjectFormatCode::Avi => "AVI (0x300A)".into(),
+        ObjectFormatCode::Mpeg => "MPEG (0x300B)".into(),
+        ObjectFormatCode::Mp4Container => "MP4 (0xB982)".into(),
+        ObjectFormatCode::M4aAudio => "M4A (0xB984)".into(),
+        ObjectFormatCode::WmaAudio => "WMA (0xB901)".into(),
+        ObjectFormatCode::WmvVideo => "WMV (0xB981)".into(),
+        ObjectFormatCode::FlacAudio => "FLAC (0xB906)".into(),
+        ObjectFormatCode::Unknown(c) => format!("Unknown(0x{c:04X})"),
+        other => format!("{other:?}"),
+    }
+}
+
+fn format_datetime(dt: &mtp_rs::ptp::DateTime) -> String {
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+        dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second
+    )
 }
 
 impl DeviceBackend for MtpBackend {
@@ -281,5 +393,75 @@ impl DeviceBackend for MtpBackend {
             .block_on(self.storage.rename(ObjectHandle(handle_raw), new_name))
             .with_context(|| format!("failed to rename object {entry_id}"))?;
         Ok(())
+    }
+
+    fn inspect_object(&self, entry_id: &str) -> Result<InspectorData> {
+        let handle_raw: u32 = entry_id
+            .parse()
+            .with_context(|| format!("invalid object handle: {entry_id}"))?;
+        let handle = ObjectHandle(handle_raw);
+
+        let info = self
+            .rt
+            .block_on(self.storage.get_object_info(handle))
+            .with_context(|| format!("failed to get object info for {entry_id}"))?;
+
+        let image_dimensions = if info.image_width > 0 || info.image_height > 0 {
+            Some(format!("{}x{}", info.image_width, info.image_height))
+        } else {
+            None
+        };
+        let thumb_dimensions = if info.thumb_width > 0 || info.thumb_height > 0 {
+            Some(format!(
+                "{}x{} ({}, {} bytes)",
+                info.thumb_width,
+                info.thumb_height,
+                format_object_format(info.thumb_format),
+                info.thumb_size,
+            ))
+        } else {
+            None
+        };
+
+        let mut properties = Vec::new();
+        let session = self.device.session();
+        // TODO(mtp-rs 0x9805): use GetObjectPropList to batch-fetch all properties
+        // in one MTP round-trip instead of N sequential calls. See MTP_RS_GAPS.md patch #4.
+        for &prop_code in INSPECTOR_PROPERTIES {
+            let result = self
+                .rt
+                .block_on(session.get_object_prop_value(handle, prop_code));
+            let (value, is_error) = match result {
+                Ok(bytes) => (decode_prop_value(prop_code, &bytes), false),
+                Err(e) => (format!("{e:#}"), true),
+            };
+            properties.push(InspectorProperty {
+                code: prop_code.into(),
+                name: prop_name(prop_code),
+                value,
+                is_error,
+            });
+        }
+
+        Ok(InspectorData {
+            object_handle: format!("0x{:08X} ({})", handle.0, handle.0),
+            filename: info.filename,
+            format: format_object_format(info.format),
+            size: format!("{} ({} bytes)", format_size(info.size), info.size),
+            storage_id: format!("0x{:08X}", info.storage_id.0),
+            parent_id: format!("0x{:08X}", info.parent.0),
+            protection: format!("{:?}", info.protection_status),
+            created: info.created.as_ref().map(format_datetime),
+            modified: info.modified.as_ref().map(format_datetime),
+            keywords: if info.keywords.is_empty() {
+                "(none)".into()
+            } else {
+                info.keywords
+            },
+            image_dimensions,
+            thumb_dimensions,
+            properties,
+            scroll_offset: 0,
+        })
     }
 }
