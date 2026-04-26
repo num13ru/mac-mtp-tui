@@ -191,11 +191,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if oi.is_folder() {
                             println!("  {kind}  {}", oi.filename);
                         } else {
-                            println!(
-                                "  {kind}  {} ({})",
-                                oi.filename,
-                                format_bytes(oi.size)
-                            );
+                            println!("  {kind}  {} ({})", oi.filename, format_bytes(oi.size));
                         }
                     }
                     Err(e) => println!("  handle {:?}: error {e}", handle),
