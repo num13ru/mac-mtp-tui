@@ -23,6 +23,7 @@ enum ListingMsg {
     Done {
         backend: Box<dyn DeviceBackend>,
         result: Result<Vec<DeviceEntry>>,
+        storage_info: Option<(u64, u64)>,
     },
     InitFailed(String),
 }
@@ -36,6 +37,7 @@ pub struct App {
     pub device_error: Option<String>,
     pub device_name_cached: String,
     pub device_path_cached: String,
+    pub storage_info_cached: Option<(u64, u64)>,
     pub status: String,
     pub show_help: bool,
     pub confirm_dialog: Option<ConfirmDialog>,
@@ -62,13 +64,15 @@ impl App {
             let result = MtpBackend::new().and_then(|b| {
                 let backend: Box<dyn DeviceBackend> = Box::new(b);
                 let entries = backend.list_current_dir()?;
-                Ok((backend, entries))
+                let storage_info = backend.storage_info();
+                Ok((backend, entries, storage_info))
             });
             match result {
-                Ok((backend, entries)) => {
+                Ok((backend, entries, storage_info)) => {
                     tx.send(ListingMsg::Done {
                         backend,
                         result: Ok(entries),
+                        storage_info,
                     })
                     .ok();
                 }
@@ -87,6 +91,7 @@ impl App {
             device_error: None,
             device_name_cached: String::new(),
             device_path_cached: String::new(),
+            storage_info_cached: None,
             status: "Connecting to device…".into(),
             show_help: false,
             confirm_dialog: None,
@@ -156,11 +161,16 @@ impl App {
                 ListingMsg::Progress { fetched, total } => {
                     self.loading_progress = Some((fetched, total));
                 }
-                ListingMsg::Done { backend, result } => {
+                ListingMsg::Done {
+                    backend,
+                    result,
+                    storage_info,
+                } => {
                     let was_connecting = self.device_connecting;
                     self.device_connecting = false;
                     self.device_name_cached = backend.device_name().to_string();
                     self.device_path_cached = backend.current_path().to_string();
+                    self.storage_info_cached = storage_info;
                     if was_connecting {
                         self.status = format!("Connected to {}", self.device_name_cached);
                     }
@@ -223,13 +233,20 @@ impl App {
         self.dir_rx = Some(rx);
 
         thread::spawn(move || {
+            let mut backend = backend;
             let progress_tx = tx.clone();
             let result = backend.list_current_dir_with_progress(&|fetched, total| {
                 progress_tx
                     .send(ListingMsg::Progress { fetched, total })
                     .ok();
             });
-            tx.send(ListingMsg::Done { backend, result }).ok();
+            let storage_info = backend.refresh_storage_info();
+            tx.send(ListingMsg::Done {
+                backend,
+                result,
+                storage_info,
+            })
+            .ok();
         });
     }
 
@@ -346,16 +363,19 @@ impl App {
                                 self.status = format!("Error: {e:#}");
                             }
                         }
-                        ConfirmAction::Delete { entry_id, name } => match self.backend.as_mut() {
-                            Some(backend) => match backend.delete(&entry_id) {
-                                Ok(()) => {
+                        ConfirmAction::Delete { entry_id, name } => {
+                            let result = self.backend.as_mut().map(|b| b.delete(&entry_id));
+                            match result {
+                                Some(Ok(())) => {
+                                    self.storage_info_cached =
+                                        self.backend.as_ref().and_then(|b| b.storage_info());
                                     self.status = format!("Deleted {name}");
                                     self.spawn_device_listing_preserving_selection();
                                 }
-                                Err(e) => self.status = format!("Error: {e:#}"),
-                            },
-                            None => self.status = "No device connected".into(),
-                        },
+                                Some(Err(e)) => self.status = format!("Error: {e:#}"),
+                                None => self.status = "No device connected".into(),
+                            }
+                        }
                         ConfirmAction::Quit => {
                             self.should_quit = true;
                         }
@@ -565,6 +585,8 @@ impl App {
 
         self.status = format!("Pushing {filename}...");
         backend.push_file(source)?;
+
+        self.storage_info_cached = self.backend.as_ref().and_then(|b| b.storage_info());
         self.status = format!("Pushed {filename}");
         self.spawn_device_listing_preserving_selection();
         Ok(())
@@ -611,16 +633,19 @@ impl App {
 
     fn submit_text_input(&mut self, action: TextInputAction, input: &str) {
         match action {
-            TextInputAction::Mkdir => match self.backend.as_mut() {
-                Some(backend) => match backend.mkdir(input) {
-                    Ok(()) => {
+            TextInputAction::Mkdir => {
+                let result = self.backend.as_mut().map(|b| b.mkdir(input));
+                match result {
+                    Some(Ok(())) => {
+                        self.storage_info_cached =
+                            self.backend.as_ref().and_then(|b| b.storage_info());
                         self.status = format!("Created directory {input}");
                         self.spawn_device_listing_preserving_selection();
                     }
-                    Err(e) => self.status = format!("Error: {e:#}"),
-                },
-                None => self.status = "No device connected".into(),
-            },
+                    Some(Err(e)) => self.status = format!("Error: {e:#}"),
+                    None => self.status = "No device connected".into(),
+                }
+            }
             TextInputAction::Rename { entry_id } => match self.backend.as_mut() {
                 Some(backend) => match backend.rename(&entry_id, input) {
                     Ok(()) => {

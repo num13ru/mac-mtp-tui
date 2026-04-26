@@ -45,6 +45,12 @@ pub trait DeviceBackend: Send {
     fn inspect_object(&self, _entry_id: &str) -> Result<InspectorData> {
         anyhow::bail!("inspect_object is not implemented yet")
     }
+    fn storage_info(&self) -> Option<(u64, u64)> {
+        None
+    }
+    fn refresh_storage_info(&mut self) -> Option<(u64, u64)> {
+        self.storage_info()
+    }
 }
 
 pub struct MtpBackend {
@@ -325,6 +331,7 @@ impl DeviceBackend for MtpBackend {
             )
             .with_context(|| format!("failed to upload {filename}"))?;
 
+        let _ = self.rt.block_on(self.storage.refresh());
         Ok(())
     }
 
@@ -363,6 +370,7 @@ impl DeviceBackend for MtpBackend {
         self.rt
             .block_on(self.storage.create_folder(parent, name))
             .with_context(|| format!("failed to create directory {name}"))?;
+        let _ = self.rt.block_on(self.storage.refresh());
         Ok(())
     }
 
@@ -373,6 +381,7 @@ impl DeviceBackend for MtpBackend {
         self.rt
             .block_on(self.storage.delete(ObjectHandle(handle_raw)))
             .with_context(|| format!("failed to delete object {entry_id}"))?;
+        let _ = self.rt.block_on(self.storage.refresh());
         Ok(())
     }
 
@@ -457,5 +466,15 @@ impl DeviceBackend for MtpBackend {
             properties,
             scroll_offset: 0,
         })
+    }
+
+    fn storage_info(&self) -> Option<(u64, u64)> {
+        let info = self.storage.info();
+        Some((info.free_space_bytes, info.max_capacity))
+    }
+
+    fn refresh_storage_info(&mut self) -> Option<(u64, u64)> {
+        let _ = self.rt.block_on(self.storage.refresh());
+        self.storage_info()
     }
 }

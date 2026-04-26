@@ -1,5 +1,5 @@
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
@@ -101,7 +101,17 @@ impl App {
             format!(" {} {} ", self.device_name_cached, self.device_path_cached)
         };
 
-        let block = pane_block(title, self.focus == FocusPane::Device);
+        let mut block = pane_block(title, self.focus == FocusPane::Device);
+        if let Some((free, total)) = self.storage_info_cached {
+            block = block.title_bottom(
+                Line::from(format!(
+                    " {} free / {} ",
+                    format_size(free),
+                    format_size(total)
+                ))
+                .alignment(Alignment::Right),
+            );
+        }
 
         if self.device_loading && self.device.entries.is_empty() {
             let msg = if self.device_connecting {
