@@ -199,46 +199,46 @@ impl App {
         let dim = Style::default().add_modifier(Modifier::DIM);
         let bold = Style::default().add_modifier(Modifier::BOLD);
 
-        let mut lines: Vec<Line> = Vec::new();
-
-        lines.push(Line::from(Span::styled("--- ObjectInfo ---", bold)));
-        lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled("  Handle:      ", dim),
-            Span::raw(&data.object_handle),
-        ]));
-        lines.push(Line::from(vec![
-            Span::styled("  Filename:    ", dim),
-            Span::raw(&data.filename),
-        ]));
-        lines.push(Line::from(vec![
-            Span::styled("  Format:      ", dim),
-            Span::raw(&data.format),
-        ]));
-        lines.push(Line::from(vec![
-            Span::styled("  Size:        ", dim),
-            Span::raw(&data.size),
-        ]));
-        lines.push(Line::from(vec![
-            Span::styled("  Storage:     ", dim),
-            Span::raw(&data.storage_id),
-        ]));
-        lines.push(Line::from(vec![
-            Span::styled("  Parent:      ", dim),
-            Span::raw(&data.parent_id),
-        ]));
-        lines.push(Line::from(vec![
-            Span::styled("  Protection:  ", dim),
-            Span::raw(&data.protection),
-        ]));
-        lines.push(Line::from(vec![
-            Span::styled("  Created:     ", dim),
-            Span::raw(data.created.as_deref().unwrap_or("(none)")),
-        ]));
-        lines.push(Line::from(vec![
-            Span::styled("  Modified:    ", dim),
-            Span::raw(data.modified.as_deref().unwrap_or("(none)")),
-        ]));
+        let mut lines: Vec<Line> = vec![
+            Line::from(Span::styled("--- ObjectInfo ---", bold)),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("  Handle:      ", dim),
+                Span::raw(&data.object_handle),
+            ]),
+            Line::from(vec![
+                Span::styled("  Filename:    ", dim),
+                Span::raw(&data.filename),
+            ]),
+            Line::from(vec![
+                Span::styled("  Format:      ", dim),
+                Span::raw(&data.format),
+            ]),
+            Line::from(vec![
+                Span::styled("  Size:        ", dim),
+                Span::raw(&data.size),
+            ]),
+            Line::from(vec![
+                Span::styled("  Storage:     ", dim),
+                Span::raw(&data.storage_id),
+            ]),
+            Line::from(vec![
+                Span::styled("  Parent:      ", dim),
+                Span::raw(&data.parent_id),
+            ]),
+            Line::from(vec![
+                Span::styled("  Protection:  ", dim),
+                Span::raw(&data.protection),
+            ]),
+            Line::from(vec![
+                Span::styled("  Created:     ", dim),
+                Span::raw(data.created.as_deref().unwrap_or("(none)")),
+            ]),
+            Line::from(vec![
+                Span::styled("  Modified:    ", dim),
+                Span::raw(data.modified.as_deref().unwrap_or("(none)")),
+            ]),
+        ];
         if !data.keywords.is_empty() {
             lines.push(Line::from(vec![
                 Span::styled("  Keywords:    ", dim),
@@ -317,9 +317,7 @@ impl App {
             .unwrap_or(char_count);
 
         // Visible window: up to inner_width chars, kept so cursor is always in view.
-        let vis_start = if char_count <= inner_width {
-            0
-        } else if cursor_char < inner_width {
+        let vis_start = if cursor_char < inner_width {
             0
         } else {
             cursor_char - inner_width + 1
@@ -394,7 +392,7 @@ impl App {
             .lines()
             .map(|line| {
                 if inner_width > 0 {
-                    ((line.len() as u16) + inner_width - 1) / inner_width
+                    (line.len() as u16).div_ceil(inner_width)
                 } else {
                     1
                 }
@@ -432,7 +430,7 @@ impl App {
         let inner_width = max_width.saturating_sub(2); // border left + right
         let msg_len = dialog.message.len() as u16;
         let msg_lines = if inner_width > 0 {
-            (msg_len + inner_width - 1) / inner_width
+            msg_len.div_ceil(inner_width)
         } else {
             1
         };
@@ -442,16 +440,17 @@ impl App {
         let area = centered_fixed(frame.area(), max_width, height);
         frame.render_widget(Clear, area);
 
-        let mut lines: Vec<Line> = Vec::new();
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::raw(&dialog.message)));
-        lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled("[Y]", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw("es    "),
-            Span::styled("[N]", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw("o"),
-        ]));
+        let lines: Vec<Line> = vec![
+            Line::from(""),
+            Line::from(Span::raw(&dialog.message)),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("[Y]", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw("es    "),
+                Span::styled("[N]", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw("o"),
+            ]),
+        ];
 
         let title = format!(" {} ", dialog.title);
         let paragraph = Paragraph::new(lines)

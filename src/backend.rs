@@ -113,7 +113,7 @@ impl MtpBackend {
     }
 }
 
-pub fn sort_device_entries(entries: &mut Vec<DeviceEntry>) {
+pub fn sort_device_entries(entries: &mut [DeviceEntry]) {
     entries.sort_by(|a, b| match (a.kind, b.kind) {
         (DeviceEntryKind::Directory, DeviceEntryKind::File) => Ordering::Less,
         (DeviceEntryKind::File, DeviceEntryKind::Directory) => Ordering::Greater,

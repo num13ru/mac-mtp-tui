@@ -194,7 +194,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             println!(
                                 "  {kind}  {} ({})",
                                 oi.filename,
-                                format_bytes(oi.size as u64)
+                                format_bytes(oi.size)
                             );
                         }
                     }

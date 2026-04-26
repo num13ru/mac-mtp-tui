@@ -150,11 +150,11 @@ impl<T> PaneState<T> {
     where
         F: Fn(&T) -> &str,
     {
-        if let Some(name) = name {
-            if let Some(pos) = self.entries.iter().position(|e| name_of(e) == name) {
-                self.selected = pos;
-                return;
-            }
+        if let Some(name) = name
+            && let Some(pos) = self.entries.iter().position(|e| name_of(e) == name)
+        {
+            self.selected = pos;
+            return;
         }
         self.clamp_selected();
     }
