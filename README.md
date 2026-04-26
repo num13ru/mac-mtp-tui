@@ -8,6 +8,8 @@ Two-pane layout: local filesystem on the left, device storage on the right. Brow
 
 Built with [ratatui](https://ratatui.rs) and [mtp-rs](https://github.com/vdavid/mtp-rs). Pure Rust, no libmtp/libusb.
 
+![mtp-tui screenshot](assets/screenshot.png)
+
 ## Usage
 
 Connect an MTP device via USB, then:
