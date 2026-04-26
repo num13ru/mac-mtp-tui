@@ -1,8 +1,8 @@
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
-use ratatui::Frame;
 
 use crate::app::App;
 use crate::types::{DeviceEntryKind, FocusPane};
@@ -83,9 +83,7 @@ impl App {
                 .device_error
                 .as_deref()
                 .unwrap_or("No MTP device found");
-            let paragraph = Paragraph::new(msg)
-                .block(block)
-                .wrap(Wrap { trim: false });
+            let paragraph = Paragraph::new(msg).block(block).wrap(Wrap { trim: false });
             frame.render_widget(paragraph, area);
             return;
         }
@@ -100,10 +98,7 @@ impl App {
                 self.device_name_cached, self.device_path_cached, spinner,
             )
         } else {
-            format!(
-                " {} {} ",
-                self.device_name_cached, self.device_path_cached
-            )
+            format!(" {} {} ", self.device_name_cached, self.device_path_cached)
         };
 
         let block = pane_block(title, self.focus == FocusPane::Device);
@@ -119,9 +114,7 @@ impl App {
                     _ => "Loading…".into(),
                 }
             };
-            let paragraph = Paragraph::new(msg)
-                .block(block)
-                .wrap(Wrap { trim: false });
+            let paragraph = Paragraph::new(msg).block(block).wrap(Wrap { trim: false });
             frame.render_widget(paragraph, area);
             return;
         }
@@ -296,8 +289,8 @@ impl App {
         let visible: Vec<Line> = lines.into_iter().skip(offset).take(inner_height).collect();
 
         let title = format!(" Inspector: {} ", data.filename);
-        let paragraph = Paragraph::new(visible)
-            .block(Block::default().title(title).borders(Borders::ALL));
+        let paragraph =
+            Paragraph::new(visible).block(Block::default().title(title).borders(Borders::ALL));
         frame.render_widget(paragraph, area);
     }
 
@@ -338,7 +331,12 @@ impl App {
         let mut after = String::new();
         let mut cursor_ch: Option<char> = None;
 
-        for (i, &(_, ch)) in chars.iter().enumerate().skip(vis_start).take(vis_end - vis_start) {
+        for (i, &(_, ch)) in chars
+            .iter()
+            .enumerate()
+            .skip(vis_start)
+            .take(vis_end - vis_start)
+        {
             let rel = i - vis_start;
             if rel < cursor_in_vis {
                 before.push(ch);
@@ -464,11 +462,7 @@ impl App {
 }
 
 fn pane_block(title: String, active: bool) -> Block<'static> {
-    let title = if active {
-        format!(">{}", title)
-    } else {
-        title
-    };
+    let title = if active { format!(">{}", title) } else { title };
 
     Block::default().title(title).borders(Borders::ALL)
 }

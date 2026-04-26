@@ -16,7 +16,10 @@ use crate::types::{
 };
 
 enum ListingMsg {
-    Progress { fetched: usize, total: usize },
+    Progress {
+        fetched: usize,
+        total: usize,
+    },
     Done {
         backend: Box<dyn DeviceBackend>,
         result: Result<Vec<DeviceEntry>>,
@@ -206,9 +209,9 @@ impl App {
 
         if reset_selection {
             self.device_selected_name = None;
-        } else {
-            self.device_selected_name =
-                self.device.selected().map(|e| e.name.clone());
+            self.device.selected = 0;
+        } else if self.device_selected_name.is_none() {
+            self.device_selected_name = self.device.selected().map(|e| e.name.clone());
         }
 
         self.device_loading = true;
@@ -343,18 +346,16 @@ impl App {
                                 self.status = format!("Error: {e:#}");
                             }
                         }
-                        ConfirmAction::Delete { entry_id, name } => {
-                            match self.backend.as_mut() {
-                                Some(backend) => match backend.delete(&entry_id) {
-                                    Ok(()) => {
-                                        self.status = format!("Deleted {name}");
-                                        self.spawn_device_listing_preserving_selection();
-                                    }
-                                    Err(e) => self.status = format!("Error: {e:#}"),
-                                },
-                                None => self.status = "No device connected".into(),
-                            }
-                        }
+                        ConfirmAction::Delete { entry_id, name } => match self.backend.as_mut() {
+                            Some(backend) => match backend.delete(&entry_id) {
+                                Ok(()) => {
+                                    self.status = format!("Deleted {name}");
+                                    self.spawn_device_listing_preserving_selection();
+                                }
+                                Err(e) => self.status = format!("Error: {e:#}"),
+                            },
+                            None => self.status = "No device connected".into(),
+                        },
                         ConfirmAction::Quit => {
                             self.should_quit = true;
                         }
@@ -452,6 +453,7 @@ impl App {
                     return Ok(());
                 };
                 if entry.is_dir {
+                    self.host.push_cursor(entry.name.clone());
                     self.host_cwd = entry.path;
                     self.host.entries = Self::read_host_dir(&self.host_cwd)?;
                     self.host.selected = 0;
@@ -467,6 +469,7 @@ impl App {
                     return Ok(());
                 };
                 if entry.kind == DeviceEntryKind::Directory {
+                    self.device.push_cursor(entry.name.clone());
                     backend.enter_dir(&entry.id, &entry.name)?;
                     self.device_path_cached = backend.current_path().to_string();
                     self.status = format!("Device: {}", self.device_path_cached);
@@ -483,7 +486,7 @@ impl App {
                 if let Some(parent) = self.host_cwd.parent() {
                     self.host_cwd = parent.to_path_buf();
                     self.host.entries = Self::read_host_dir(&self.host_cwd)?;
-                    self.host.selected = 0;
+                    self.host.pop_cursor(|e| &e.name);
                     self.status = format!("Host: {}", self.host_cwd.display());
                 }
             }
@@ -492,10 +495,11 @@ impl App {
                     self.status = "No device connected".into();
                     return Ok(());
                 };
+                self.device_selected_name = self.device.pop_cursor_name();
                 backend.go_up()?;
                 self.device_path_cached = backend.current_path().to_string();
                 self.status = format!("Device: {}", self.device_path_cached);
-                self.spawn_device_listing();
+                self.spawn_device_listing_preserving_selection();
             }
         }
         Ok(())

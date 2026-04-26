@@ -39,7 +39,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Model        : {}", info.model);
     println!("  Device ver.  : {}", info.device_version);
     println!("  Serial       : {}", info.serial_number);
-    println!("  PTP version  : {}.{:02}", info.standard_version / 100, info.standard_version % 100);
+    println!(
+        "  PTP version  : {}.{:02}",
+        info.standard_version / 100,
+        info.standard_version % 100
+    );
     println!("  Vendor ext ID: 0x{:08X}", info.vendor_extension_id);
     println!("  Vendor ext v.: {}", info.vendor_extension_version);
     println!("  Vendor ext   : {:?}", info.vendor_extension_desc);
@@ -47,7 +51,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
 
     // ── Supported Operations ────────────────────────────────────────────
-    println!("--- Supported Operations ({}) ---", info.operations_supported.len());
+    println!(
+        "--- Supported Operations ({}) ---",
+        info.operations_supported.len()
+    );
     for op in &info.operations_supported {
         let raw: u16 = (*op).into();
         println!("  0x{raw:04X}  {op:?}");
@@ -63,7 +70,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
 
     // ── Device Properties ───────────────────────────────────────────────
-    println!("--- Device Properties ({}) ---", info.device_properties_supported.len());
+    println!(
+        "--- Device Properties ({}) ---",
+        info.device_properties_supported.len()
+    );
     for &prop_code in &info.device_properties_supported {
         let prop = DevicePropertyCode::from(prop_code);
         print!("  0x{prop_code:04X}  {prop:?}");
@@ -97,26 +107,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ── Capability Summary ──────────────────────────────────────────────
     println!("--- Capability Quick-Check ---");
     let checks: &[(OperationCode, &str)] = &[
-        (OperationCode::GetStorageIds,    "GetStorageIds"),
-        (OperationCode::GetStorageInfo,   "GetStorageInfo"),
+        (OperationCode::GetStorageIds, "GetStorageIds"),
+        (OperationCode::GetStorageInfo, "GetStorageInfo"),
         (OperationCode::GetObjectHandles, "GetObjectHandles"),
-        (OperationCode::GetObjectInfo,    "GetObjectInfo"),
-        (OperationCode::GetObject,        "GetObject (download)"),
-        (OperationCode::GetPartialObject, "GetPartialObject (range download)"),
-        (OperationCode::SendObjectInfo,   "SendObjectInfo (upload prep)"),
-        (OperationCode::SendObject,       "SendObject (upload data)"),
-        (OperationCode::DeleteObject,     "DeleteObject"),
-        (OperationCode::MoveObject,       "MoveObject"),
-        (OperationCode::CopyObject,       "CopyObject"),
-        (OperationCode::GetObjectPropValue, "GetObjectPropValue (MTP)"),
-        (OperationCode::SetObjectPropValue, "SetObjectPropValue (MTP rename)"),
-        (OperationCode::GetDevicePropDesc,  "GetDevicePropDesc"),
+        (OperationCode::GetObjectInfo, "GetObjectInfo"),
+        (OperationCode::GetObject, "GetObject (download)"),
+        (
+            OperationCode::GetPartialObject,
+            "GetPartialObject (range download)",
+        ),
+        (
+            OperationCode::SendObjectInfo,
+            "SendObjectInfo (upload prep)",
+        ),
+        (OperationCode::SendObject, "SendObject (upload data)"),
+        (OperationCode::DeleteObject, "DeleteObject"),
+        (OperationCode::MoveObject, "MoveObject"),
+        (OperationCode::CopyObject, "CopyObject"),
+        (
+            OperationCode::GetObjectPropValue,
+            "GetObjectPropValue (MTP)",
+        ),
+        (
+            OperationCode::SetObjectPropValue,
+            "SetObjectPropValue (MTP rename)",
+        ),
+        (OperationCode::GetDevicePropDesc, "GetDevicePropDesc"),
         (OperationCode::GetDevicePropValue, "GetDevicePropValue"),
         (OperationCode::SetDevicePropValue, "SetDevicePropValue"),
-        (OperationCode::InitiateCapture,    "InitiateCapture (camera)"),
+        (OperationCode::InitiateCapture, "InitiateCapture (camera)"),
     ];
     for (op, label) in checks {
-        let mark = if info.supports_operation(*op) { "+" } else { "-" };
+        let mark = if info.supports_operation(*op) {
+            "+"
+        } else {
+            "-"
+        };
         println!("  [{mark}] {label}");
     }
     println!();
@@ -165,7 +191,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if oi.is_folder() {
                             println!("  {kind}  {}", oi.filename);
                         } else {
-                            println!("  {kind}  {} ({})", oi.filename, format_bytes(oi.size as u64));
+                            println!(
+                                "  {kind}  {} ({})",
+                                oi.filename,
+                                format_bytes(oi.size as u64)
+                            );
                         }
                     }
                     Err(e) => println!("  handle {:?}: error {e}", handle),

@@ -169,13 +169,7 @@ fn decode_prop_value(code: ObjectPropertyCode, bytes: &[u8]) -> String {
         | ObjectPropertyCode::DateCreated
         | ObjectPropertyCode::DateModified
         | ObjectPropertyCode::Name => unpack_string(bytes)
-            .map(|(s, _)| {
-                if s.is_empty() {
-                    "(empty)".into()
-                } else {
-                    s
-                }
-            })
+            .map(|(s, _)| if s.is_empty() { "(empty)".into() } else { s })
             .unwrap_or_else(|_| hex_dump(bytes)),
         ObjectPropertyCode::Unknown(_) => hex_dump(bytes),
     }
@@ -323,12 +317,12 @@ impl DeviceBackend for MtpBackend {
         let parent = self.current_handle();
 
         self.rt
-            .block_on(self.storage.upload_with_progress(
-                parent,
-                info,
-                stream,
-                |_progress| ControlFlow::Continue(()),
-            ))
+            .block_on(
+                self.storage
+                    .upload_with_progress(parent, info, stream, |_progress| {
+                        ControlFlow::Continue(())
+                    }),
+            )
             .with_context(|| format!("failed to upload {filename}"))?;
 
         Ok(())

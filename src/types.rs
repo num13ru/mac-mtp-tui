@@ -18,18 +18,9 @@ pub struct ConfirmDialog {
 }
 
 pub enum ConfirmAction {
-    OverwritePush {
-        source: PathBuf,
-        delete_id: String,
-    },
-    OverwritePull {
-        entry_id: String,
-        filename: String,
-    },
-    Delete {
-        entry_id: String,
-        name: String,
-    },
+    OverwritePush { source: PathBuf, delete_id: String },
+    OverwritePull { entry_id: String, filename: String },
+    Delete { entry_id: String, name: String },
     Quit,
 }
 
@@ -95,6 +86,7 @@ pub struct InspectorData {
 pub struct PaneState<T> {
     pub entries: Vec<T>,
     pub selected: usize,
+    cursor_name_stack: Vec<String>,
 }
 
 impl<T> PaneState<T> {
@@ -102,7 +94,27 @@ impl<T> PaneState<T> {
         Self {
             entries,
             selected: 0,
+            cursor_name_stack: Vec::new(),
         }
+    }
+
+    pub fn push_cursor(&mut self, name: String) {
+        self.cursor_name_stack.push(name);
+    }
+
+    pub fn pop_cursor<F>(&mut self, name_of: F)
+    where
+        F: Fn(&T) -> &str,
+    {
+        if let Some(name) = self.cursor_name_stack.pop() {
+            self.restore_selection_by_name(Some(&name), name_of);
+        } else {
+            self.clamp_selected();
+        }
+    }
+
+    pub fn pop_cursor_name(&mut self) -> Option<String> {
+        self.cursor_name_stack.pop()
     }
 
     pub fn select_next(&mut self) {
