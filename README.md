@@ -1,4 +1,5 @@
 # mtp-tui
+
 ![Rust](https://img.shields.io/badge/Rust-000000?style=flat&logo=rust&logoColor=white)
 [![CI](https://github.com/num13ru/mtp-tui/actions/workflows/CI.yml/badge.svg)](https://github.com/num13ru/mtp-tui/actions/workflows/CI.yml)
 
@@ -10,11 +11,23 @@ Built with [ratatui](https://ratatui.rs) and [mtp-rs](https://github.com/vdavid/
 
 ![mtp-tui screenshot](assets/screenshot.png)
 
+## Features
+
+- **Device support** — Android phones, Kindle, cameras via MTP/PTP
+- **Two-pane browsing** — local filesystem + device storage side by side
+- **File transfers** — push (`p`) and pull (`g`) with overwrite confirmation
+- **File management** — delete (`d`), rename (`R`), create directory (`m`)
+- **Object inspector** *(WIP)* — view MTP metadata and properties (`i`)
+- **Async loading** — spinner and streaming progress ("Loading 42/500..."), UI never freezes
+- **Storage info** — free / total space display
+
+See [ROADMAP.md](ROADMAP.md) for planned improvements.
+
 ## Usage
 
 Connect an MTP device via USB, then:
 
-```
+```sh
 cargo run
 ```
 
@@ -22,7 +35,7 @@ cargo run
 
 If macOS grabs the device first:
 
-```
+```sh
 sudo killall ptpcamerad
 ```
 
@@ -39,6 +52,7 @@ sudo killall ptpcamerad
 | `d` | Delete selected device entry |
 | `m` | Create directory on device |
 | `R` | Rename selected device entry |
+| `i` | Inspect object metadata |
 | `r` | Refresh both panes |
 | `?` | Toggle help overlay |
 | `Esc` | Close dialog / help |
@@ -49,28 +63,44 @@ sudo killall ptpcamerad
 
 Dump device capabilities, supported operations, storages, and root objects:
 
-```
+```sh
 mkdir -p log && cargo run --example mtp_capabilities > log/mtp_capabilities.log 2>&1
 ```
 
-## Status
+## Development
 
-Early stage. Working:
+### Prerequisites
 
-- Device detection and connection (including Kindle)
-- Directory browsing on both panes
-- File size display
-- Async directory loading with spinner (UI never freezes)
-- Streaming progress counter ("Loading 42/500...")
+- [Rust](https://rustup.rs/) (edition 2024, requires rustc 1.85+)
+- [just](https://github.com/casey/just) — task runner
 
-- Push file to device (`p`) with overwrite confirmation
-- Pull file from device (`g`) with overwrite confirmation
-- Delete file/directory on device (`d`) with confirmation
-- Create directory on device (`m`)
-- Rename file/directory on device (`R`)
-- Quit confirmation dialog
+### Setup
 
-See [ROADMAP.md](ROADMAP.md) for planned improvements.
+```sh
+git clone https://github.com/num13ru/mtp-tui.git
+cd mtp-tui
+cargo build
+```
+
+### Common tasks
+
+| Command | Description |
+|---|---|
+| `just` | Run all checks (format, clippy, tests) |
+| `just fix` | Auto-fix formatting and clippy warnings |
+| `just fmt` | Format code with `cargo fmt` |
+| `just fmt-check` | Check formatting without modifying files |
+| `just clippy` | Run clippy with `-D warnings` |
+| `just test` | Run tests |
+
+### Workflow
+
+```sh
+just        # before committing — runs fmt-check, clippy, tests
+just fix    # auto-fix what can be fixed
+```
+
+Clippy is configured with `-D warnings` — all warnings are treated as errors. See [`clippy.toml`](clippy.toml) for project-specific lints.
 
 ## License
 
