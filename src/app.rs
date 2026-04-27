@@ -95,61 +95,64 @@ impl App {
     }
 
     fn poll_device_listing(&mut self) {
-        let rx = match &self.device_state {
-            DeviceState::Connecting { rx, .. } => rx,
-            DeviceState::Loading(state) => &state.rx,
-            _ => return,
-        };
+        loop {
+            let rx = match &self.device_state {
+                DeviceState::Connecting { rx, .. } => rx,
+                DeviceState::Loading(state) => &state.rx,
+                _ => return,
+            };
 
-        let msg = match rx.try_recv() {
-            Ok(m) => m,
-            Err(mpsc::TryRecvError::Empty) => return,
-            Err(mpsc::TryRecvError::Disconnected) => {
-                self.device_state = DeviceState::Disconnected { error: None };
-                self.status = "Error: device listing thread crashed".into();
-                return;
-            }
-        };
-
-        match msg {
-            ListingMsg::Progress { fetched, total } => {
-                if let DeviceState::Loading(state) = &mut self.device_state {
-                    state.progress = Some((fetched, total));
+            let msg = match rx.try_recv() {
+                Ok(m) => m,
+                Err(mpsc::TryRecvError::Empty) => return,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.device_state = DeviceState::Disconnected { error: None };
+                    self.status = "Error: device listing thread crashed".into();
+                    return;
                 }
-            }
-            ListingMsg::Done {
-                backend,
-                result,
-                storage_info,
-            } => {
-                let was_connecting = matches!(self.device_state, DeviceState::Connecting { .. });
-                let selected_name = match &self.device_state {
-                    DeviceState::Loading(state) => state.selected_name.clone(),
-                    _ => None,
-                };
+            };
 
-                let cache = DeviceCache {
-                    name: backend.device_name().to_string(),
-                    path: backend.current_path().to_string(),
-                    storage_info,
-                };
-                if was_connecting {
-                    self.status = format!("Connected to {}", cache.name);
-                }
-
-                self.device_state = DeviceState::Connected { backend, cache };
-                match result {
-                    Ok(entries) => {
-                        self.device_pane.entries = entries;
-                        self.device_pane
-                            .restore_selection_by_name(selected_name.as_deref(), |e| &e.name);
+            match msg {
+                ListingMsg::Progress { fetched, total } => {
+                    if let DeviceState::Loading(state) = &mut self.device_state {
+                        state.progress = Some((fetched, total));
                     }
-                    Err(e) => self.status = format!("Error: {e:#}"),
                 }
-            }
-            ListingMsg::InitFailed(msg) => {
-                self.device_state = DeviceState::Disconnected { error: Some(msg) };
-                self.status = "No device connected".into();
+                ListingMsg::Done {
+                    backend,
+                    result,
+                    storage_info,
+                } => {
+                    let was_connecting =
+                        matches!(self.device_state, DeviceState::Connecting { .. });
+                    let selected_name = match &self.device_state {
+                        DeviceState::Loading(state) => state.selected_name.clone(),
+                        _ => None,
+                    };
+
+                    let cache = DeviceCache {
+                        name: backend.device_name().to_string(),
+                        path: backend.current_path().to_string(),
+                        storage_info,
+                    };
+                    if was_connecting {
+                        self.status = format!("Connected to {}", cache.name);
+                    }
+
+                    self.device_state = DeviceState::Connected { backend, cache };
+                    match result {
+                        Ok(entries) => {
+                            self.device_pane.entries = entries;
+                            self.device_pane
+                                .restore_selection_by_name(selected_name.as_deref(), |e| &e.name);
+                        }
+                        Err(e) => self.status = format!("Error: {e:#}"),
+                    }
+                }
+                ListingMsg::InitFailed(msg) => {
+                    self.device_state = DeviceState::Disconnected { error: Some(msg) };
+                    self.status = "No device connected".into();
+                }
             }
         }
     }
@@ -425,17 +428,6 @@ impl App {
                 backend.go_up()?;
                 cache.path = backend.current_path().to_string();
                 self.status = format!("Device: {}", cache.path);
-
-                // Stash the popped name so spawn_device_listing_inner uses it
-                // instead of the current selection.
-                let prev = std::mem::replace(
-                    &mut self.device_state,
-                    DeviceState::Disconnected { error: None },
-                );
-                let DeviceState::Connected { backend, cache } = prev else {
-                    unreachable!();
-                };
-                self.device_state = DeviceState::Connected { backend, cache };
                 self.spawn_device_listing_inner_with_name(pop_name);
             }
         }
