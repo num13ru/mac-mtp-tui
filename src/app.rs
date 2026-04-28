@@ -30,6 +30,8 @@ pub struct App {
     pub device_state: DeviceState,
     pub status: String,
     pub show_help: bool,
+    pub show_hidden_host: bool,
+    pub show_hidden_device: bool,
     pub dialog: ActiveDialog,
     pending_warning: Option<InfoDialog>,
     should_quit: bool,
@@ -48,11 +50,15 @@ impl App {
             (None, None) => None,
         };
 
+        let show_hidden_host = config.ui.show_hidden_host_files;
+        let show_hidden_device = config.ui.show_hidden_device_files;
+
         let host_cwd = match config.host_dir() {
             Some(dir) => dir,
             None => std::env::current_dir().context("failed to get current directory")?,
         };
-        let host = PaneState::new(read_host_dir(&host_cwd)?);
+        let entries = filter_hidden_host(read_host_dir(&host_cwd)?, show_hidden_host);
+        let host = PaneState::new(entries);
 
         let default_device_dir = config.device_dir().map(String::from);
 
@@ -103,6 +109,8 @@ impl App {
             },
             status: "Connecting to device…".into(),
             show_help: false,
+            show_hidden_host,
+            show_hidden_device,
             dialog,
             pending_warning: None,
             should_quit: false,
@@ -181,7 +189,8 @@ impl App {
                     self.device_state = DeviceState::Connected { backend, cache };
                     match result {
                         Ok(entries) => {
-                            self.device_pane.entries = entries;
+                            self.device_pane.entries =
+                                filter_hidden_device(entries, self.show_hidden_device);
                             self.device_pane
                                 .restore_selection_by_name(selected_name.as_deref(), |e| &e.name);
                         }
@@ -404,6 +413,7 @@ impl App {
             (KeyCode::Char('m'), _) => self.mkdir_prompt(),
             (KeyCode::Char('R'), _) => self.rename_prompt(),
             (KeyCode::Char('i'), _) => self.open_inspector(),
+            (KeyCode::Char('.'), _) => self.toggle_hidden(),
             _ => {}
         }
 
@@ -415,6 +425,31 @@ impl App {
             FocusPane::Host => FocusPane::Device,
             FocusPane::Device => FocusPane::Host,
         };
+    }
+
+    fn toggle_hidden(&mut self) {
+        match self.focus {
+            FocusPane::Host => {
+                self.show_hidden_host = !self.show_hidden_host;
+                if let Ok(entries) = read_host_dir(&self.host_cwd) {
+                    self.host.update_entries(
+                        filter_hidden_host(entries, self.show_hidden_host),
+                        |e| &e.name,
+                    );
+                }
+                let state = if self.show_hidden_host { "shown" } else { "hidden" };
+                self.status = format!("Hidden files {state}");
+            }
+            FocusPane::Device => {
+                self.show_hidden_device = !self.show_hidden_device;
+                if matches!(self.device_state, DeviceState::Connected { .. }) {
+                    let name = self.device_pane.selected().map(|e| e.name.clone());
+                    self.spawn_device_listing(name);
+                }
+                let state = if self.show_hidden_device { "shown" } else { "hidden" };
+                self.status = format!("Hidden files {state}");
+            }
+        }
     }
 
     fn move_up(&mut self) {
@@ -440,7 +475,8 @@ impl App {
                 if entry.is_dir {
                     self.host.push_cursor(entry.name.clone());
                     self.host_cwd = entry.path;
-                    self.host.entries = read_host_dir(&self.host_cwd)?;
+                    self.host.entries =
+                        filter_hidden_host(read_host_dir(&self.host_cwd)?, self.show_hidden_host);
                     self.host.selected = 0;
                     self.status = format!("Host: {}", self.host_cwd.display());
                 }
@@ -471,7 +507,8 @@ impl App {
             FocusPane::Host => {
                 if let Some(parent) = self.host_cwd.parent() {
                     self.host_cwd = parent.to_path_buf();
-                    self.host.entries = read_host_dir(&self.host_cwd)?;
+                    self.host.entries =
+                        filter_hidden_host(read_host_dir(&self.host_cwd)?, self.show_hidden_host);
                     self.host.pop_cursor(|e| &e.name);
                     self.status = format!("Host: {}", self.host_cwd.display());
                 }
@@ -492,8 +529,8 @@ impl App {
     }
 
     fn refresh(&mut self) -> Result<()> {
-        self.host
-            .update_entries(read_host_dir(&self.host_cwd)?, |e| &e.name);
+        let entries = filter_hidden_host(read_host_dir(&self.host_cwd)?, self.show_hidden_host);
+        self.host.update_entries(entries, |e| &e.name);
         if matches!(self.device_state, DeviceState::Connected { .. }) {
             let name = self.device_pane.selected().map(|e| e.name.clone());
             self.spawn_device_listing(name);
@@ -836,7 +873,10 @@ impl App {
                 self.status = format!("{} {filename}", if is_pull { "Pulled" } else { "Pushed" });
                 if is_pull {
                     if let Ok(entries) = read_host_dir(&self.host_cwd) {
-                        self.host.update_entries(entries, |e| &e.name);
+                        self.host.update_entries(
+                            filter_hidden_host(entries, self.show_hidden_host),
+                            |e| &e.name,
+                        );
                     }
                 } else {
                     let sel = self.device_pane.selected().map(|e| e.name.clone());
@@ -915,6 +955,28 @@ pub fn read_host_dir(path: &Path) -> Result<Vec<HostEntry>> {
     });
 
     Ok(entries)
+}
+
+fn filter_hidden_host(entries: Vec<HostEntry>, show_hidden: bool) -> Vec<HostEntry> {
+    if show_hidden {
+        entries
+    } else {
+        entries
+            .into_iter()
+            .filter(|e| !e.name.starts_with('.'))
+            .collect()
+    }
+}
+
+fn filter_hidden_device(entries: Vec<DeviceEntry>, show_hidden: bool) -> Vec<DeviceEntry> {
+    if show_hidden {
+        entries
+    } else {
+        entries
+            .into_iter()
+            .filter(|e| !e.name.starts_with('.'))
+            .collect()
+    }
 }
 
 /// Walk into `device_dir` segment by segment (e.g. "/Download/Books").

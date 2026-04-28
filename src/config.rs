@@ -13,6 +13,10 @@ const DEFAULT_TEMPLATE: &str = "\
 
 # Navigate to this device folder after connecting (default: root).
 # default_device_dir = \"/Download\"
+
+# [ui]
+# show_hidden_host_files = false
+# show_hidden_device_files = false
 ";
 
 #[derive(Debug, Default, Deserialize)]
@@ -20,6 +24,23 @@ const DEFAULT_TEMPLATE: &str = "\
 pub struct Config {
     pub default_host_dir: Option<String>,
     pub default_device_dir: Option<String>,
+    pub ui: UiConfig,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(default)]
+pub struct UiConfig {
+    pub show_hidden_host_files: bool,
+    pub show_hidden_device_files: bool,
+}
+
+impl Default for UiConfig {
+    fn default() -> Self {
+        Self {
+            show_hidden_host_files: false,
+            show_hidden_device_files: false,
+        }
+    }
 }
 
 impl Config {
@@ -176,6 +197,7 @@ mod tests {
         let config = Config {
             default_host_dir: Some("~/nonexistent_dir_abc123".into()),
             default_device_dir: None,
+            ..Default::default()
         };
         let expanded = config.host_dir_expanded().unwrap();
         assert!(expanded.is_absolute());
@@ -188,9 +210,58 @@ mod tests {
         let config = Config {
             default_host_dir: Some("relative/path".into()),
             default_device_dir: None,
+            ..Default::default()
         };
         let expanded = config.host_dir_expanded().unwrap();
         assert!(!expanded.is_absolute());
         assert!(config.host_dir().is_none(), "host_dir() should be None for relative path");
+    }
+
+    #[test]
+    fn ui_defaults_hidden() {
+        let config: Config = toml::from_str("").unwrap();
+        assert!(!config.ui.show_hidden_host_files);
+        assert!(!config.ui.show_hidden_device_files);
+    }
+
+    #[test]
+    fn parse_ui_section() {
+        let config: Config = toml::from_str(
+            r#"
+            [ui]
+            show_hidden_host_files = true
+            show_hidden_device_files = true
+            "#,
+        )
+        .unwrap();
+        assert!(config.ui.show_hidden_host_files);
+        assert!(config.ui.show_hidden_device_files);
+    }
+
+    #[test]
+    fn parse_ui_partial() {
+        let config: Config = toml::from_str(
+            r#"
+            [ui]
+            show_hidden_host_files = true
+            "#,
+        )
+        .unwrap();
+        assert!(config.ui.show_hidden_host_files);
+        assert!(!config.ui.show_hidden_device_files);
+    }
+
+    #[test]
+    fn existing_config_without_ui_section() {
+        let config: Config = toml::from_str(
+            r#"
+            default_host_dir = "~/Downloads"
+            default_device_dir = "/Download"
+            "#,
+        )
+        .unwrap();
+        assert!(!config.ui.show_hidden_host_files);
+        assert!(!config.ui.show_hidden_device_files);
+        assert_eq!(config.default_host_dir.as_deref(), Some("~/Downloads"));
     }
 }

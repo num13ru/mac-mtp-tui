@@ -186,7 +186,7 @@ fn render_file_list(
 
 fn draw_status_bar(status: &str, frame: &mut Frame, area: Rect) {
     let text = format!(
-        "Tab pane • i inspect • p push • g pull • d del • m mkdir • R rename • r refresh • ? help • q quit    {status}",
+        "Tab pane • i inspect • p push • g pull • d del • m mkdir • R rename • . hidden • r refresh • ? help • q quit    {status}",
     );
     frame.render_widget(Paragraph::new(text), area);
 }
@@ -212,6 +212,7 @@ fn draw_help(frame: &mut Frame) {
         Line::from("  R           rename"),
         Line::from(""),
         Line::from("App:"),
+        Line::from("  .           toggle hidden files"),
         Line::from("  r           refresh both panes"),
         Line::from("  ?           toggle this help"),
         Line::from("  Esc         close dialog / help"),

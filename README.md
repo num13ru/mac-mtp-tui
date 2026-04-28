@@ -79,6 +79,7 @@ sudo killall ptpcamerad
 | `m` | Create directory on device |
 | `R` | Rename selected device entry |
 | `i` | Inspect object metadata |
+| `.` | Toggle hidden files in focused pane |
 | `r` | Refresh both panes |
 | `?` | Toggle help overlay |
 | `Esc` | Close dialog / help |
@@ -99,6 +100,20 @@ default_device_dir = "/Download"
 ```
 
 `$XDG_CONFIG_HOME` is respected when set. If the config file is missing or malformed, defaults are used silently.
+
+### Hidden files
+
+By default, `mtp-tui` hides dotfiles and dot-directories such as `.metadata`, `.thumbnails`, etc.
+
+This can be changed in the config:
+
+```toml
+[ui]
+show_hidden_host_files = true
+show_hidden_device_files = true
+```
+
+Press `.` to temporarily toggle hidden files in the focused pane.
 
 ## Diagnostics
 
