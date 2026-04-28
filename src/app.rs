@@ -26,6 +26,7 @@ pub struct App {
     pub host_cwd: PathBuf,
     pub host: PaneState<HostEntry>,
     pub device_pane: PaneState<DeviceEntry>,
+    pub device_raw_entries: Vec<DeviceEntry>,
     pub focus: FocusPane,
     pub device_state: DeviceState,
     pub status: String,
@@ -102,6 +103,7 @@ impl App {
             host_cwd,
             host,
             device_pane: PaneState::new(vec![]),
+            device_raw_entries: Vec::new(),
             focus: FocusPane::Host,
             device_state: DeviceState::Connecting {
                 rx,
@@ -189,6 +191,7 @@ impl App {
                     self.device_state = DeviceState::Connected { backend, cache };
                     match result {
                         Ok(entries) => {
+                            self.device_raw_entries = entries.clone();
                             self.device_pane.entries =
                                 filter_hidden_device(entries, self.show_hidden_device);
                             self.device_pane
@@ -197,9 +200,7 @@ impl App {
                         Err(e) => self.status = format!("Error: {e:#}"),
                     }
 
-                    if was_connecting
-                        && let Some(message) = warning
-                    {
+                    if was_connecting && let Some(message) = warning {
                         let info = InfoDialog {
                             title: "Warning".into(),
                             message,
@@ -213,6 +214,7 @@ impl App {
                 }
                 ListingMsg::InitFailed(msg) => {
                     self.device_state = DeviceState::Disconnected { error: Some(msg) };
+                    self.device_raw_entries.clear();
                     self.status = "No device connected".into();
                 }
             }
@@ -432,21 +434,32 @@ impl App {
             FocusPane::Host => {
                 self.show_hidden_host = !self.show_hidden_host;
                 if let Ok(entries) = read_host_dir(&self.host_cwd) {
-                    self.host.update_entries(
-                        filter_hidden_host(entries, self.show_hidden_host),
-                        |e| &e.name,
-                    );
+                    self.host
+                        .update_entries(filter_hidden_host(entries, self.show_hidden_host), |e| {
+                            &e.name
+                        });
                 }
-                let state = if self.show_hidden_host { "shown" } else { "hidden" };
+                let state = if self.show_hidden_host {
+                    "shown"
+                } else {
+                    "hidden"
+                };
                 self.status = format!("Hidden files {state}");
             }
             FocusPane::Device => {
                 self.show_hidden_device = !self.show_hidden_device;
-                if matches!(self.device_state, DeviceState::Connected { .. }) {
-                    let name = self.device_pane.selected().map(|e| e.name.clone());
-                    self.spawn_device_listing(name);
+                self.device_pane.entries =
+                    filter_hidden_device(self.device_raw_entries.clone(), self.show_hidden_device);
+                // Preserve selection by name if possible
+                if let Some(name) = self.device_pane.selected().map(|e| e.name.clone()) {
+                    self.device_pane
+                        .restore_selection_by_name(Some(&name), |e| &e.name);
                 }
-                let state = if self.show_hidden_device { "shown" } else { "hidden" };
+                let state = if self.show_hidden_device {
+                    "shown"
+                } else {
+                    "hidden"
+                };
                 self.status = format!("Hidden files {state}");
             }
         }
@@ -495,6 +508,7 @@ impl App {
                     cache.path = backend.current_path().to_string();
                     self.status = format!("Device: {}", cache.path);
                     self.device_pane.selected = 0;
+                    self.device_raw_entries.clear();
                     self.spawn_device_listing(None);
                 }
             }
@@ -522,6 +536,7 @@ impl App {
                 backend.go_up()?;
                 cache.path = backend.current_path().to_string();
                 self.status = format!("Device: {}", cache.path);
+                self.device_raw_entries.clear();
                 self.spawn_device_listing(pop_name);
             }
         }

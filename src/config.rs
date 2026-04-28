@@ -27,20 +27,11 @@ pub struct Config {
     pub ui: UiConfig,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct UiConfig {
     pub show_hidden_host_files: bool,
     pub show_hidden_device_files: bool,
-}
-
-impl Default for UiConfig {
-    fn default() -> Self {
-        Self {
-            show_hidden_host_files: false,
-            show_hidden_device_files: false,
-        }
-    }
 }
 
 impl Config {
@@ -202,7 +193,10 @@ mod tests {
         let expanded = config.host_dir_expanded().unwrap();
         assert!(expanded.is_absolute());
         assert!(expanded.ends_with("nonexistent_dir_abc123"));
-        assert!(config.host_dir().is_none(), "host_dir() should be None for missing dir");
+        assert!(
+            config.host_dir().is_none(),
+            "host_dir() should be None for missing dir"
+        );
     }
 
     #[test]
@@ -214,7 +208,10 @@ mod tests {
         };
         let expanded = config.host_dir_expanded().unwrap();
         assert!(!expanded.is_absolute());
-        assert!(config.host_dir().is_none(), "host_dir() should be None for relative path");
+        assert!(
+            config.host_dir().is_none(),
+            "host_dir() should be None for relative path"
+        );
     }
 
     #[test]
