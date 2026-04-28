@@ -13,7 +13,7 @@ use crate::backend::MtpBackend;
 use crate::types::{
     ActiveDialog, ConfirmAction, ConfirmDialog, DeviceCache, DeviceEntry, DeviceEntryKind,
     DeviceState, FocusPane, HostEntry, InfoDialog, ListingMsg, LoadingState, PaneState,
-    TextInputAction, TextInputDialog, TextInputResult,
+    TextInputAction, TextInputDialog, TextInputResult, TransferDialog, TransferKind, TransferMsg,
 };
 
 const MAX_MSGS_PER_TICK: usize = 1_000;
@@ -33,7 +33,7 @@ pub struct App {
 impl App {
     pub fn new() -> Result<Self> {
         let host_cwd = std::env::current_dir().context("failed to get current directory")?;
-        let host = PaneState::new(Self::read_host_dir(&host_cwd)?);
+        let host = PaneState::new(read_host_dir(&host_cwd)?);
 
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
@@ -90,6 +90,7 @@ impl App {
             }
 
             self.poll_device_listing();
+            self.poll_transfer();
             self.device_state.tick_spinner();
         }
 
@@ -159,20 +160,12 @@ impl App {
         }
     }
 
-    fn spawn_device_listing(&mut self) {
-        self.spawn_device_listing_inner(true);
-    }
-
-    fn spawn_device_listing_preserving_selection(&mut self) {
-        self.spawn_device_listing_inner(false);
-    }
-
-    fn spawn_device_listing_inner(&mut self, reset_selection: bool) {
+    fn spawn_device_listing(&mut self, selected_name: Option<String>) {
+        debug_assert!(
+            matches!(self.device_state, DeviceState::Connected { .. }),
+            "spawn_device_listing called in non-Connected state"
+        );
         if !matches!(self.device_state, DeviceState::Connected { .. }) {
-            debug_assert!(
-                false,
-                "spawn_device_listing_inner called in non-Connected state"
-            );
             return;
         }
         let prev = std::mem::replace(
@@ -182,14 +175,6 @@ impl App {
         let DeviceState::Connected { backend, cache } = prev else {
             unreachable!();
         };
-
-        let selected_name = if reset_selection {
-            self.device_pane.selected = 0;
-            None
-        } else {
-            self.device_pane.selected().map(|e| e.name.clone())
-        };
-
         self.start_listing_thread(backend, cache, selected_name);
     }
 
@@ -209,6 +194,12 @@ impl App {
             }
             ActiveDialog::Confirm(_) => {
                 self.handle_confirm_key(key);
+                return Ok(());
+            }
+            ActiveDialog::Transfer(_) => {
+                if key.code == KeyCode::Char('c') && key.modifiers == KeyModifiers::CONTROL {
+                    self.should_quit = true;
+                }
                 return Ok(());
             }
             ActiveDialog::None => {}
@@ -279,14 +270,17 @@ impl App {
     fn execute_confirm(&mut self, action: ConfirmAction) {
         match action {
             ConfirmAction::OverwritePush { source, delete_id } => {
-                if let Err(e) = self.do_push_file(&source, Some(&delete_id)) {
-                    self.status = format!("Error: {e:#}");
-                }
+                self.spawn_transfer(TransferKind::Push {
+                    source,
+                    delete_id: Some(delete_id),
+                });
             }
             ConfirmAction::OverwritePull { entry_id, filename } => {
-                if let Err(e) = self.do_pull_file(&entry_id, &filename) {
-                    self.status = format!("Error: {e:#}");
-                }
+                self.spawn_transfer(TransferKind::Pull {
+                    entry_id,
+                    filename,
+                    target_dir: self.host_cwd.clone(),
+                });
             }
             ConfirmAction::Delete { entry_id, name } => {
                 let DeviceState::Connected { backend, cache } = &mut self.device_state else {
@@ -297,7 +291,8 @@ impl App {
                     Ok(()) => {
                         cache.storage_info = backend.storage_info();
                         self.status = format!("Deleted {name}");
-                        self.spawn_device_listing_preserving_selection();
+                        let sel = self.device_pane.selected().map(|e| e.name.clone());
+                        self.spawn_device_listing(sel);
                     }
                     Err(e) => self.status = format!("Error: {e:#}"),
                 }
@@ -392,7 +387,7 @@ impl App {
                 if entry.is_dir {
                     self.host.push_cursor(entry.name.clone());
                     self.host_cwd = entry.path;
-                    self.host.entries = Self::read_host_dir(&self.host_cwd)?;
+                    self.host.entries = read_host_dir(&self.host_cwd)?;
                     self.host.selected = 0;
                     self.status = format!("Host: {}", self.host_cwd.display());
                 }
@@ -410,7 +405,8 @@ impl App {
                     backend.enter_dir(&entry.id, &entry.name)?;
                     cache.path = backend.current_path().to_string();
                     self.status = format!("Device: {}", cache.path);
-                    self.spawn_device_listing();
+                    self.device_pane.selected = 0;
+                    self.spawn_device_listing(None);
                 }
             }
         }
@@ -422,7 +418,7 @@ impl App {
             FocusPane::Host => {
                 if let Some(parent) = self.host_cwd.parent() {
                     self.host_cwd = parent.to_path_buf();
-                    self.host.entries = Self::read_host_dir(&self.host_cwd)?;
+                    self.host.entries = read_host_dir(&self.host_cwd)?;
                     self.host.pop_cursor(|e| &e.name);
                     self.status = format!("Host: {}", self.host_cwd.display());
                 }
@@ -436,7 +432,7 @@ impl App {
                 backend.go_up()?;
                 cache.path = backend.current_path().to_string();
                 self.status = format!("Device: {}", cache.path);
-                self.spawn_device_listing_inner_with_name(pop_name);
+                self.spawn_device_listing(pop_name);
             }
         }
         Ok(())
@@ -444,9 +440,10 @@ impl App {
 
     fn refresh(&mut self) -> Result<()> {
         self.host
-            .update_entries(Self::read_host_dir(&self.host_cwd)?, |e| &e.name);
+            .update_entries(read_host_dir(&self.host_cwd)?, |e| &e.name);
         if matches!(self.device_state, DeviceState::Connected { .. }) {
-            self.spawn_device_listing_preserving_selection();
+            let name = self.device_pane.selected().map(|e| e.name.clone());
+            self.spawn_device_listing(name);
         }
         self.status = "Refreshed".into();
         Ok(())
@@ -485,29 +482,10 @@ impl App {
         }
 
         let path = entry.path.clone();
-        self.do_push_file(&path, None)
-    }
-
-    fn do_push_file(&mut self, source: &Path, delete_id: Option<&str>) -> Result<()> {
-        let DeviceState::Connected { backend, cache } = &mut self.device_state else {
-            anyhow::bail!("no device connected");
-        };
-        let filename = source
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-
-        if let Some(id) = delete_id {
-            self.status = format!("Deleting old {filename}...");
-            backend.delete(id)?;
-        }
-
-        self.status = format!("Pushing {filename}...");
-        backend.push_file(source)?;
-        cache.storage_info = backend.storage_info();
-
-        self.status = format!("Pushed {filename}");
-        self.spawn_device_listing_preserving_selection();
+        self.spawn_transfer(TransferKind::Push {
+            source: path,
+            delete_id: None,
+        });
         Ok(())
     }
 
@@ -536,19 +514,11 @@ impl App {
             return Ok(());
         }
 
-        self.do_pull_file(&entry_id, &filename)
-    }
-
-    fn do_pull_file(&mut self, entry_id: &str, filename: &str) -> Result<()> {
-        let DeviceState::Connected { backend, .. } = &mut self.device_state else {
-            anyhow::bail!("no device connected");
-        };
-
-        self.status = format!("Pulling {filename}...");
-        backend.pull_file(entry_id, filename, &self.host_cwd)?;
-        self.status = format!("Pulled {filename}");
-        self.host
-            .update_entries(Self::read_host_dir(&self.host_cwd)?, |e| &e.name);
+        self.spawn_transfer(TransferKind::Pull {
+            entry_id,
+            filename,
+            target_dir: self.host_cwd.clone(),
+        });
         Ok(())
     }
 
@@ -563,7 +533,8 @@ impl App {
                     Ok(()) => {
                         cache.storage_info = backend.storage_info();
                         self.status = format!("Created directory {input}");
-                        self.spawn_device_listing_preserving_selection();
+                        let sel = self.device_pane.selected().map(|e| e.name.clone());
+                        self.spawn_device_listing(sel);
                     }
                     Err(e) => self.status = format!("Error: {e:#}"),
                 }
@@ -576,7 +547,8 @@ impl App {
                 match backend.rename(&entry_id, input) {
                     Ok(()) => {
                         self.status = format!("Renamed to {input}");
-                        self.spawn_device_listing_preserving_selection();
+                        let sel = self.device_pane.selected().map(|e| e.name.clone());
+                        self.spawn_device_listing(sel);
                     }
                     Err(e) => self.status = format!("Error: {e:#}"),
                 }
@@ -688,12 +660,9 @@ impl App {
         }
     }
 
-    fn spawn_device_listing_inner_with_name(&mut self, selected_name: Option<String>) {
+    fn spawn_transfer(&mut self, kind: TransferKind) {
         if !matches!(self.device_state, DeviceState::Connected { .. }) {
-            debug_assert!(
-                false,
-                "spawn_device_listing_inner_with_name called in non-Connected state"
-            );
+            self.status = "No device connected".into();
             return;
         }
         let prev = std::mem::replace(
@@ -704,7 +673,113 @@ impl App {
             unreachable!();
         };
 
-        self.start_listing_thread(backend, cache, selected_name);
+        let (filename, direction) = match &kind {
+            TransferKind::Push { source, .. } => (
+                source
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                "Pushing",
+            ),
+            TransferKind::Pull { filename, .. } => (filename.clone(), "Pulling"),
+        };
+
+        let (tx, rx) = mpsc::channel();
+        self.device_state = DeviceState::Transferring { cache };
+        self.dialog = ActiveDialog::Transfer(TransferDialog {
+            rx,
+            filename: filename.clone(),
+            direction,
+            spinner_tick: 0,
+        });
+        self.status = format!("{direction} {filename}...");
+
+        thread::spawn(move || {
+            let mut backend = backend;
+            let result = match kind {
+                TransferKind::Push { source, delete_id } => {
+                    let mut r = Ok(());
+                    if let Some(ref id) = delete_id {
+                        r = backend.delete(id);
+                    }
+                    if r.is_ok() {
+                        r = backend.push_file(&source);
+                    }
+                    r
+                }
+                TransferKind::Pull {
+                    entry_id,
+                    filename,
+                    target_dir,
+                } => backend.pull_file(&entry_id, &filename, &target_dir),
+            };
+            let storage_info = backend.storage_info();
+            tx.send(TransferMsg::Done {
+                backend,
+                result,
+                storage_info,
+            })
+            .ok();
+        });
+    }
+
+    fn poll_transfer(&mut self) {
+        let ActiveDialog::Transfer(ref mut dialog) = self.dialog else {
+            return;
+        };
+        dialog.spinner_tick = dialog.spinner_tick.wrapping_add(1);
+
+        let msg = match dialog.rx.try_recv() {
+            Ok(m) => m,
+            Err(mpsc::TryRecvError::Empty) => return,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.device_state = DeviceState::Disconnected { error: None };
+                self.dialog = ActiveDialog::None;
+                self.status = "Error: transfer thread crashed".into();
+                return;
+            }
+        };
+
+        let TransferMsg::Done {
+            backend,
+            result,
+            storage_info,
+        } = msg;
+
+        let is_pull = dialog.direction == "Pulling";
+        let filename = dialog.filename.clone();
+
+        let mut cache = match std::mem::replace(
+            &mut self.device_state,
+            DeviceState::Disconnected { error: None },
+        ) {
+            DeviceState::Transferring { cache } => cache,
+            other => {
+                self.device_state = other;
+                self.dialog = ActiveDialog::None;
+                self.status = "Error: unexpected state after transfer".into();
+                return;
+            }
+        };
+        cache.storage_info = storage_info;
+
+        self.device_state = DeviceState::Connected { backend, cache };
+        self.dialog = ActiveDialog::None;
+
+        match result {
+            Ok(()) => {
+                self.status = format!("{} {filename}", if is_pull { "Pulled" } else { "Pushed" });
+                if is_pull {
+                    if let Ok(entries) = read_host_dir(&self.host_cwd) {
+                        self.host.update_entries(entries, |e| &e.name);
+                    }
+                } else {
+                    let sel = self.device_pane.selected().map(|e| e.name.clone());
+                    self.spawn_device_listing(sel);
+                }
+            }
+            Err(e) => self.status = format!("Error: {e:#}"),
+        }
     }
 
     fn start_listing_thread(
@@ -743,35 +818,35 @@ impl App {
             .ok();
         });
     }
+}
 
-    pub fn read_host_dir(path: &Path) -> Result<Vec<HostEntry>> {
-        let mut entries = fs::read_dir(path)
-            .with_context(|| format!("failed to read directory: {}", path.display()))?
-            .filter_map(|result| result.ok())
-            .filter_map(|entry| {
-                let path = entry.path();
-                let metadata = entry.metadata().ok()?;
-                let is_dir = metadata.is_dir();
-                let size = if metadata.is_file() {
-                    Some(metadata.len())
-                } else {
-                    None
-                };
-                Some(HostEntry {
-                    name: entry.file_name().to_string_lossy().to_string(),
-                    path,
-                    is_dir,
-                    size,
-                })
+pub fn read_host_dir(path: &Path) -> Result<Vec<HostEntry>> {
+    let mut entries = fs::read_dir(path)
+        .with_context(|| format!("failed to read directory: {}", path.display()))?
+        .filter_map(|result| result.ok())
+        .filter_map(|entry| {
+            let path = entry.path();
+            let metadata = entry.metadata().ok()?;
+            let is_dir = metadata.is_dir();
+            let size = if metadata.is_file() {
+                Some(metadata.len())
+            } else {
+                None
+            };
+            Some(HostEntry {
+                name: entry.file_name().to_string_lossy().to_string(),
+                path,
+                is_dir,
+                size,
             })
-            .collect::<Vec<_>>();
+        })
+        .collect::<Vec<_>>();
 
-        entries.sort_by(|a, b| match (a.is_dir, b.is_dir) {
-            (true, false) => Ordering::Less,
-            (false, true) => Ordering::Greater,
-            _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-        });
+    entries.sort_by(|a, b| match (a.is_dir, b.is_dir) {
+        (true, false) => Ordering::Less,
+        (false, true) => Ordering::Greater,
+        _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+    });
 
-        Ok(entries)
-    }
+    Ok(entries)
 }

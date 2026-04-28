@@ -49,6 +49,9 @@ pub enum DeviceState {
         backend: Box<dyn DeviceBackend>,
         cache: DeviceCache,
     },
+    Transferring {
+        cache: DeviceCache,
+    },
     Disconnected {
         error: Option<String>,
     },
@@ -56,7 +59,10 @@ pub enum DeviceState {
 
 impl DeviceState {
     pub fn is_loading(&self) -> bool {
-        matches!(self, Self::Connecting { .. } | Self::Loading(_))
+        matches!(
+            self,
+            Self::Connecting { .. } | Self::Loading(_) | Self::Transferring { .. }
+        )
     }
 
     pub fn tick_spinner(&mut self) {
@@ -72,12 +78,40 @@ impl DeviceState {
     }
 }
 
+pub enum TransferKind {
+    Push {
+        source: PathBuf,
+        delete_id: Option<String>,
+    },
+    Pull {
+        entry_id: String,
+        filename: String,
+        target_dir: PathBuf,
+    },
+}
+
+pub enum TransferMsg {
+    Done {
+        backend: Box<dyn DeviceBackend>,
+        result: Result<()>,
+        storage_info: Option<(u64, u64)>,
+    },
+}
+
+pub struct TransferDialog {
+    pub rx: mpsc::Receiver<TransferMsg>,
+    pub filename: String,
+    pub direction: &'static str,
+    pub spinner_tick: usize,
+}
+
 pub enum ActiveDialog {
     None,
     Confirm(ConfirmDialog),
     TextInput(TextInputDialog),
     Info(InfoDialog),
     Inspector(Box<InspectorData>),
+    Transfer(TransferDialog),
 }
 
 pub struct InfoDialog {

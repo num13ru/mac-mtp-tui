@@ -38,6 +38,7 @@ pub fn draw(app: &App, frame: &mut Frame) {
         ActiveDialog::TextInput(_) => draw_text_input_dialog(app, frame),
         ActiveDialog::Info(_) => draw_info_dialog(app, frame),
         ActiveDialog::Inspector(_) => draw_inspector(app, frame),
+        ActiveDialog::Transfer(_) => draw_transfer_dialog(app, frame),
     }
 
     if app.show_help {
@@ -120,7 +121,7 @@ fn draw_device_pane(app: &App, frame: &mut Frame, area: Rect) {
                 draw_device_entries(&app.device_pane, block, frame, area);
             }
         }
-        DeviceState::Connected { cache, .. } => {
+        DeviceState::Connected { cache, .. } | DeviceState::Transferring { cache } => {
             let title = format!(" {} {} ", cache.name, cache.path);
             let mut block = pane_block(title, focused);
             if let Some((free, total)) = cache.storage_info {
@@ -463,6 +464,28 @@ fn draw_confirm_dialog(app: &App, frame: &mut Frame) {
     let title = format!(" {} ", dialog.title);
     let paragraph = Paragraph::new(lines)
         .block(Block::default().title(title).borders(Borders::ALL))
+        .wrap(Wrap { trim: false });
+    frame.render_widget(paragraph, area);
+}
+
+fn draw_transfer_dialog(app: &App, frame: &mut Frame) {
+    let ActiveDialog::Transfer(dialog) = &app.dialog else {
+        return;
+    };
+
+    let spinner = SPINNER_FRAMES[dialog.spinner_tick % SPINNER_FRAMES.len()];
+    let msg = format!("{spinner} {} {}...", dialog.direction, dialog.filename);
+
+    let max_width = (frame.area().width).min(50);
+    let height: u16 = 5;
+
+    let area = centered_fixed(frame.area(), max_width, height);
+    frame.render_widget(Clear, area);
+
+    let lines = vec![Line::from(""), Line::from(Span::raw(msg))];
+
+    let paragraph = Paragraph::new(lines)
+        .block(Block::default().title(" Transfer ").borders(Borders::ALL))
         .wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
 }
