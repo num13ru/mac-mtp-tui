@@ -288,7 +288,7 @@ fn build_inspector_lines<'a>(data: &'a crate::types::InspectorData) -> Vec<Line<
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "--- MTP Properties (GetObjectPropValue) ---",
+        "--- MTP Properties (available metadata) ---",
         bold,
     )));
     lines.push(Line::from(""));
