@@ -7,7 +7,7 @@ A terminal file manager for MTP devices (Android phones, Kindle, etc.).
 
 Two-pane layout: local filesystem on the left, device storage on the right. Browse, push, pull, delete, rename, and create directories.
 
-Unlike mount-based MTP helpers, mtp-tui talks to devices directly through [mtp-rs](https://github.com/num13ru/mtp-rs) and provides a two-pane file manager interface. No FUSE, no libmtp, no libusb — pure Rust on [nusb](https://crates.io/crates/nusb).
+Unlike mount-based MTP helpers, mtp-tui talks to devices directly through [mtp-rs](https://github.com/vdavid/mtp-rs) and provides a two-pane file manager interface. No FUSE, no libmtp, no libusb — pure Rust on [nusb](https://crates.io/crates/nusb).
 
 Built with [ratatui](https://ratatui.rs).
 

@@ -6,12 +6,9 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use bytes::Bytes;
-use mtp_rs::mtp::{MtpDevice, NewObjectInfo, Storage};
-use mtp_rs::ptp::ObjectHandle;
+use mtp_rs::mtp::{ListingItem, MtpDevice, NewObjectInfo, ObjectHandle, Storage};
 
-use crate::inspector::{
-    INSPECTOR_PROPERTIES, decode_prop_value, format_datetime, format_object_format, prop_name,
-};
+use crate::inspector::{INSPECTOR_PROPERTIES, format_datetime, format_object_format, prop_name};
 use crate::types::{DeviceEntry, DeviceEntryKind, InspectorData, InspectorProperty};
 use crate::ui::format_size;
 
@@ -151,7 +148,16 @@ impl DeviceBackend for MtpBackend {
 
         let mut entries = Vec::with_capacity(total);
         while let Some(result) = self.rt.block_on(listing.next()) {
-            let obj = result.context("failed to get object info")?;
+            let obj = match result.context("failed to get object info")? {
+                ListingItem::Object(obj) => obj,
+                ListingItem::Skipped(skipped) => {
+                    anyhow::bail!(
+                        "failed to read object metadata for handle {}: {}",
+                        skipped.handle.0,
+                        skipped.error
+                    );
+                }
+            };
             let is_dir = obj.is_folder();
             entries.push(DeviceEntry {
                 id: obj.handle.0.to_string(),
@@ -172,7 +178,7 @@ impl DeviceBackend for MtpBackend {
     }
 
     fn enter_dir(&mut self, entry_id: &str, name: &str) -> Result<()> {
-        let handle_raw: u32 = entry_id
+        let handle_raw: u64 = entry_id
             .parse()
             .with_context(|| format!("invalid object handle: {entry_id}"))?;
 
@@ -223,21 +229,29 @@ impl DeviceBackend for MtpBackend {
         let info = NewObjectInfo::file(&filename, file_size);
         let parent = self.current_handle();
 
-        self.rt
-            .block_on(
-                self.storage
-                    .upload_with_progress(parent, info, stream, |_progress| {
-                        ControlFlow::Continue(())
-                    }),
-            )
-            .with_context(|| format!("failed to upload {filename}"))?;
+        if let Err(error) = self.rt.block_on(self.storage.upload_with_progress(
+            parent,
+            info,
+            stream,
+            |_progress| ControlFlow::Continue(()),
+        )) {
+            let context = if let Some(partial) = error.partial {
+                format!(
+                    "failed to upload {filename}; a partial object may remain at handle {}",
+                    partial.0
+                )
+            } else {
+                format!("failed to upload {filename}; no object was created")
+            };
+            return Err(error.source).context(context);
+        }
 
         let _ = self.rt.block_on(self.storage.refresh());
         Ok(())
     }
 
     fn pull_file(&mut self, entry_id: &str, filename: &str, target_dir: &Path) -> Result<()> {
-        let handle_raw: u32 = entry_id
+        let handle_raw: u64 = entry_id
             .parse()
             .with_context(|| format!("invalid object handle: {entry_id}"))?;
         let handle = ObjectHandle(handle_raw);
@@ -245,14 +259,14 @@ impl DeviceBackend for MtpBackend {
 
         let mut download = self
             .rt
-            .block_on(self.storage.download_stream(handle))
+            .block_on(self.storage.download_windowed_default(handle))
             .with_context(|| format!("failed to start download of {filename}"))?;
 
         let file = fs::File::create(&target_path)
             .with_context(|| format!("failed to create: {}", target_path.display()))?;
         let mut writer = std::io::BufWriter::new(file);
 
-        while let Some(result) = self.rt.block_on(download.next_chunk()) {
+        while let Some(result) = self.rt.block_on(download.next_window()) {
             let chunk = result.with_context(|| format!("error downloading {filename}"))?;
             writer
                 .write_all(&chunk)
@@ -276,7 +290,7 @@ impl DeviceBackend for MtpBackend {
     }
 
     fn delete(&mut self, entry_id: &str) -> Result<()> {
-        let handle_raw: u32 = entry_id
+        let handle_raw: u64 = entry_id
             .parse()
             .with_context(|| format!("invalid object handle: {entry_id}"))?;
         self.rt
@@ -290,7 +304,7 @@ impl DeviceBackend for MtpBackend {
         if !self.device.supports_rename() {
             anyhow::bail!("device does not support renaming");
         }
-        let handle_raw: u32 = entry_id
+        let handle_raw: u64 = entry_id
             .parse()
             .with_context(|| format!("invalid object handle: {entry_id}"))?;
         self.rt
@@ -300,7 +314,7 @@ impl DeviceBackend for MtpBackend {
     }
 
     fn inspect_object(&self, entry_id: &str) -> Result<InspectorData> {
-        let handle_raw: u32 = entry_id
+        let handle_raw: u64 = entry_id
             .parse()
             .with_context(|| format!("invalid object handle: {entry_id}"))?;
         let handle = ObjectHandle(handle_raw);
@@ -315,29 +329,37 @@ impl DeviceBackend for MtpBackend {
         } else {
             None
         };
-        let thumb_dimensions = if info.thumb_width > 0 || info.thumb_height > 0 {
-            Some(format!(
-                "{}x{} ({}, {} bytes)",
-                info.thumb_width,
-                info.thumb_height,
-                format_object_format(info.thumb_format),
-                info.thumb_size,
-            ))
-        } else {
-            None
-        };
-
         let mut properties = Vec::new();
-        let session = self.device.session();
-        // TODO(mtp-rs 0x9805): use GetObjectPropList to batch-fetch all properties
-        // in one MTP round-trip instead of N sequential calls. See MTP_RS_GAPS.md patch #4.
         for &prop_code in INSPECTOR_PROPERTIES {
-            let result = self
-                .rt
-                .block_on(session.get_object_prop_value(handle, prop_code));
-            let (value, is_error) = match result {
-                Ok(bytes) => (decode_prop_value(prop_code, &bytes), false),
-                Err(e) => (format!("{e:#}"), true),
+            use mtp_rs::ptp::ObjectPropertyCode;
+
+            let (value, is_error) = match prop_code {
+                ObjectPropertyCode::StorageId => (format!("0x{:08X}", info.storage_id.0), false),
+                ObjectPropertyCode::ObjectFormat => (format_object_format(info.format), false),
+                ObjectPropertyCode::ProtectionStatus => {
+                    ("not exposed by mtp-rs high-level API".into(), true)
+                }
+                ObjectPropertyCode::ObjectSize => (
+                    format!("{} ({} bytes)", format_size(info.size), info.size),
+                    false,
+                ),
+                ObjectPropertyCode::ObjectFileName | ObjectPropertyCode::Name => {
+                    (info.filename.clone(), false)
+                }
+                ObjectPropertyCode::DateCreated => (
+                    info.created
+                        .as_ref()
+                        .map_or_else(|| "(none)".into(), format_datetime),
+                    false,
+                ),
+                ObjectPropertyCode::DateModified => (
+                    info.modified
+                        .as_ref()
+                        .map_or_else(|| "(none)".into(), format_datetime),
+                    false,
+                ),
+                ObjectPropertyCode::ParentObject => (format!("0x{:08X}", info.parent.0), false),
+                ObjectPropertyCode::Unknown(_) => ("unsupported property".into(), true),
             };
             properties.push(InspectorProperty {
                 code: prop_code.into(),
@@ -354,16 +376,12 @@ impl DeviceBackend for MtpBackend {
             size: format!("{} ({} bytes)", format_size(info.size), info.size),
             storage_id: format!("0x{:08X}", info.storage_id.0),
             parent_id: format!("0x{:08X}", info.parent.0),
-            protection: format!("{:?}", info.protection_status),
+            protection: "not exposed by mtp-rs high-level API".into(),
             created: info.created.as_ref().map(format_datetime),
             modified: info.modified.as_ref().map(format_datetime),
-            keywords: if info.keywords.is_empty() {
-                "(none)".into()
-            } else {
-                info.keywords
-            },
+            keywords: String::new(),
             image_dimensions,
-            thumb_dimensions,
+            thumb_dimensions: None,
             properties,
             scroll_offset: 0,
         })
@@ -371,7 +389,7 @@ impl DeviceBackend for MtpBackend {
 
     fn storage_info(&self) -> Option<(u64, u64)> {
         let info = self.storage.info();
-        Some((info.free_space_bytes, info.max_capacity))
+        Some((info.free_space, info.total_capacity))
     }
 
     fn refresh_storage_info(&mut self) -> Option<(u64, u64)> {

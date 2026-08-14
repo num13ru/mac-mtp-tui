@@ -1,17 +1,19 @@
-# mtp-rs Missing MTP Codes
+# mtp-rs MTP Operation Backlog
 
-Codes that the Kindle Paperwhite advertises but mtp-rs currently maps to `Unknown(...)`.
-Derived from `log/mtp_capabilities.log` and cross-referenced against the MTP 1.1 spec
-and Android's `mtp.h`.
+Originally recorded against mtp-rs 0.13.2 from codes advertised by a Kindle Paperwhite.
+mtp-rs 0.30.0 names the object-property operation codes below, but its portable high-level
+API intentionally exposes only backend-neutral object metadata. Direct property operations
+remain available only through the low-level PTP API.
 
 This document serves as a patch backlog for mtp-rs.
 
-## Missing Operation Codes (`OperationCode` enum)
+## Object Property Operations
 
-mtp-rs currently defines `GetObjectPropValue` (0x9803) and `SetObjectPropValue` (0x9804)
-but none of the other MTP object-property operations.
+mtp-rs 0.30.0 defines these operation codes. The remaining integration question is which
+operations should gain typed low-level helpers and which metadata should be portable across
+the USB/PTP and Windows WPD backends.
 
-| Hex    | Shown as        | MTP Spec Name             | Description                                                        | Priority    |
+| Hex    | 0.13.2 display  | MTP Spec Name             | Description                                                        | Priority    |
 |--------|-----------------|---------------------------|--------------------------------------------------------------------|-------------|
 | 0x9801 | Unknown(38913)  | `GetObjectPropsSupported` | Returns `u16[]` of supported property codes for a given format     | **HIGH**    |
 | 0x9802 | Unknown(38914)  | `GetObjectPropDesc`       | Returns property descriptor (data type, default, range) per prop   | **HIGH**    |
@@ -45,7 +47,6 @@ use a fixed list of known properties and tolerate errors.
 
 Wire format: command takes one param (format code as `u32`), data phase returns a
 `u16[]` array. Straightforward to add:
-- Named variant in `OperationCode`
 - New `PtpSession::get_object_props_supported(format: ObjectFormatCode) -> Result<Vec<ObjectPropertyCode>>`
 
 ### 2. `GetObjectPropDesc` (0x9802) -- Typed property parsing
@@ -54,7 +55,6 @@ Returns a property descriptor dataset (data type, default value, form/range) for
 object property code + format code. Similar structure to the existing `DevicePropDesc`.
 
 Would need:
-- Named variant in `OperationCode`
 - New `ObjectPropDesc` type (mirroring `DevicePropDesc`)
 - New `PtpSession::get_object_prop_desc(format, prop) -> Result<ObjectPropDesc>`
 
@@ -76,8 +76,11 @@ Lower priority but significant performance win for inspector-style features.
 
 ## How This Affects mtp-tui
 
-The object inspector (`i` key) currently uses a fixed list of `ObjectPropertyCode`
-variants and catches per-property errors. With patches 1 and 2 above:
+The object inspector (`i` key) uses the backend-neutral metadata returned by
+`Storage::get_object_info`. It keeps a fixed list of familiar MTP property rows and marks
+protocol-specific values unavailable when the high-level API does not expose them.
+
+If mtp-rs adds portable property discovery and typed property values:
 
 - **Patch 1** would let us query the device for supported properties first, then
   only fetch those (no more try/fail on unsupported codes).
