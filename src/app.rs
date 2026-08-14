@@ -1,9 +1,9 @@
-use std::cmp::Ordering;
+use std::cell::Cell;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -21,6 +21,9 @@ use crate::ui::truncate_middle;
 const DIALOG_FILENAME_MAX: usize = 40;
 
 const MAX_MSGS_PER_TICK: usize = 1_000;
+const BACKGROUND_POLL_INTERVAL: Duration = Duration::from_millis(50);
+const IDLE_POLL_INTERVAL: Duration = Duration::from_millis(200);
+const LISTING_PROGRESS_INTERVAL: Duration = Duration::from_millis(50);
 
 pub struct App {
     pub host_cwd: PathBuf,
@@ -123,7 +126,12 @@ impl App {
         loop {
             terminal.draw(|frame| crate::ui::draw(&self, frame))?;
 
-            if event::poll(Duration::from_millis(200))?
+            let poll_interval = if self.device_state.is_loading() {
+                BACKGROUND_POLL_INTERVAL
+            } else {
+                IDLE_POLL_INTERVAL
+            };
+            if event::poll(poll_interval)?
                 && let Event::Key(key) = event::read()?
                 && key.kind == KeyEventKind::Press
             {
@@ -918,18 +926,22 @@ impl App {
         }));
 
         thread::spawn(move || {
-            let mut backend = backend;
             let progress_tx = tx.clone();
+            let last_progress = Cell::new(None::<Instant>);
             let result = backend.list_current_dir_with_progress(&|fetched, total| {
-                progress_tx
-                    .send(ListingMsg::Progress { fetched, total })
-                    .ok();
+                let now = Instant::now();
+                let interval_elapsed = match last_progress.get() {
+                    Some(previous) => now.duration_since(previous) >= LISTING_PROGRESS_INTERVAL,
+                    None => true,
+                };
+                if fetched == 0 || fetched == total || interval_elapsed {
+                    progress_tx
+                        .send(ListingMsg::Progress { fetched, total })
+                        .ok();
+                    last_progress.set(Some(now));
+                }
             });
-            let storage_info = if result.is_ok() {
-                backend.refresh_storage_info()
-            } else {
-                backend.storage_info()
-            };
+            let storage_info = backend.storage_info();
             tx.send(ListingMsg::Done {
                 backend,
                 result,
@@ -947,12 +959,17 @@ pub fn read_host_dir(path: &Path) -> Result<Vec<HostEntry>> {
         .filter_map(|result| result.ok())
         .filter_map(|entry| {
             let path = entry.path();
-            let metadata = entry.metadata().ok()?;
-            let is_dir = metadata.is_dir();
-            let size = if metadata.is_file() {
-                Some(metadata.len())
+            let is_plain_dir = entry.file_type().is_ok_and(|file_type| file_type.is_dir());
+            let (is_dir, size) = if is_plain_dir {
+                (true, None)
             } else {
-                None
+                // Preserve the existing behavior for files, symlinks, and special entries.
+                // This also falls back to metadata if reading the file type failed.
+                let metadata = entry.metadata().ok()?;
+                (
+                    metadata.is_dir(),
+                    metadata.is_file().then_some(metadata.len()),
+                )
             };
             Some(HostEntry {
                 name: entry.file_name().to_string_lossy().to_string(),
@@ -963,11 +980,7 @@ pub fn read_host_dir(path: &Path) -> Result<Vec<HostEntry>> {
         })
         .collect::<Vec<_>>();
 
-    entries.sort_by(|a, b| match (a.is_dir, b.is_dir) {
-        (true, false) => Ordering::Less,
-        (false, true) => Ordering::Greater,
-        _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-    });
+    entries.sort_by_cached_key(|entry| (!entry.is_dir, entry.name.to_lowercase()));
 
     Ok(entries)
 }
