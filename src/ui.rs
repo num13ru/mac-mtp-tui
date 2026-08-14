@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::ops::Range;
 use std::path::Path;
 
 use ratatui::Frame;
@@ -57,8 +58,16 @@ fn draw_host_pane(
 ) {
     let title = format!(" Host {} ", cwd.display());
     let block = pane_block(title, focused);
+    let range = visible_entry_range(
+        pane.entries.len(),
+        pane.selected,
+        block.inner(area).height as usize,
+    );
+    let visible_selected = selected_in_range(pane.selected, &range);
     let items: Vec<ListItem> = pane
         .entries
+        .get(range.clone())
+        .unwrap_or_default()
         .iter()
         .map(|entry| {
             let icon = if entry.is_dir { "📁" } else { "📄" };
@@ -73,7 +82,7 @@ fn draw_host_pane(
         })
         .collect();
 
-    render_file_list(items, block, pane.selected, frame, area);
+    render_file_list(items, block, visible_selected, frame, area);
 }
 
 fn draw_device_pane(app: &App, frame: &mut Frame, area: Rect) {
@@ -147,8 +156,16 @@ fn draw_device_entries(
     frame: &mut Frame,
     area: Rect,
 ) {
+    let range = visible_entry_range(
+        pane.entries.len(),
+        pane.selected,
+        block.inner(area).height as usize,
+    );
+    let visible_selected = selected_in_range(pane.selected, &range);
     let items: Vec<ListItem> = pane
         .entries
+        .get(range.clone())
+        .unwrap_or_default()
         .iter()
         .map(|entry| {
             let icon = if entry.kind == DeviceEntryKind::Directory {
@@ -167,21 +184,38 @@ fn draw_device_entries(
         })
         .collect();
 
-    render_file_list(items, block, pane.selected, frame, area);
+    render_file_list(items, block, visible_selected, frame, area);
 }
 
 fn render_file_list(
     items: Vec<ListItem<'_>>,
     block: Block<'_>,
-    selected: usize,
+    selected: Option<usize>,
     frame: &mut Frame,
     area: Rect,
 ) {
-    let mut state = ListState::default().with_selected(Some(selected));
+    let mut state = ListState::default().with_selected(selected);
     let list = List::new(items)
         .block(block)
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
     frame.render_stateful_widget(list, area, &mut state);
+}
+
+fn visible_entry_range(entry_count: usize, selected: usize, visible_rows: usize) -> Range<usize> {
+    if entry_count == 0 || visible_rows == 0 {
+        return 0..0;
+    }
+
+    let selected = selected.min(entry_count - 1);
+    let start = selected
+        .saturating_sub(visible_rows - 1)
+        .min(entry_count.saturating_sub(visible_rows));
+    let end = start.saturating_add(visible_rows).min(entry_count);
+    start..end
+}
+
+fn selected_in_range(selected: usize, range: &Range<usize>) -> Option<usize> {
+    (!range.is_empty()).then(|| selected.clamp(range.start, range.end - 1) - range.start)
 }
 
 fn draw_status_bar(status: &str, frame: &mut Frame, area: Rect) {
@@ -590,4 +624,31 @@ fn centered_rect(area: Rect, width_percent: u16, height_percent: u16) -> Rect {
         .split(vertical[1]);
 
     horizontal[1]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn visible_range_is_empty_without_entries_or_space() {
+        assert_eq!(visible_entry_range(0, 0, 10), 0..0);
+        assert_eq!(visible_entry_range(10, 0, 0), 0..0);
+        assert_eq!(selected_in_range(0, &(0..0)), None);
+    }
+
+    #[test]
+    fn visible_range_limits_rows_and_keeps_selection_visible() {
+        assert_eq!(visible_entry_range(100, 2, 10), 0..10);
+        assert_eq!(visible_entry_range(100, 50, 10), 41..51);
+        assert_eq!(visible_entry_range(100, 99, 10), 90..100);
+        assert_eq!(selected_in_range(50, &(41..51)), Some(9));
+    }
+
+    #[test]
+    fn visible_range_clamps_stale_selection() {
+        let range = visible_entry_range(3, usize::MAX, 10);
+        assert_eq!(range, 0..3);
+        assert_eq!(selected_in_range(usize::MAX, &range), Some(2));
+    }
 }

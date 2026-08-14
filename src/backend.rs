@@ -1,4 +1,3 @@
-use std::cmp::Ordering;
 use std::fs;
 use std::io::{Read, Write};
 use std::ops::ControlFlow;
@@ -44,9 +43,6 @@ pub trait DeviceBackend: Send {
     }
     fn storage_info(&self) -> Option<(u64, u64)> {
         None
-    }
-    fn refresh_storage_info(&mut self) -> Option<(u64, u64)> {
-        self.storage_info()
     }
 }
 
@@ -117,10 +113,11 @@ impl MtpBackend {
 }
 
 pub fn sort_device_entries(entries: &mut [DeviceEntry]) {
-    entries.sort_by(|a, b| match (a.kind, b.kind) {
-        (DeviceEntryKind::Directory, DeviceEntryKind::File) => Ordering::Less,
-        (DeviceEntryKind::File, DeviceEntryKind::Directory) => Ordering::Greater,
-        _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+    entries.sort_by_cached_key(|entry| {
+        (
+            entry.kind == DeviceEntryKind::File,
+            entry.name.to_lowercase(),
+        )
     });
 }
 
@@ -390,10 +387,5 @@ impl DeviceBackend for MtpBackend {
     fn storage_info(&self) -> Option<(u64, u64)> {
         let info = self.storage.info();
         Some((info.free_space, info.total_capacity))
-    }
-
-    fn refresh_storage_info(&mut self) -> Option<(u64, u64)> {
-        let _ = self.rt.block_on(self.storage.refresh());
-        self.storage_info()
     }
 }
