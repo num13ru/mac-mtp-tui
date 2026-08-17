@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use bytes::Bytes;
 use mtp_rs::mtp::{ListingItem, MtpDevice, NewObjectInfo, ObjectHandle, Storage};
 
+use crate::filename::validate_device_filename;
 use crate::inspector::{INSPECTOR_PROPERTIES, format_datetime, format_object_format, prop_name};
 use crate::types::{DeviceEntry, DeviceEntryKind, InspectorData, InspectorProperty};
 use crate::ui::format_size;
@@ -252,6 +253,7 @@ impl DeviceBackend for MtpBackend {
             .parse()
             .with_context(|| format!("invalid object handle: {entry_id}"))?;
         let handle = ObjectHandle(handle_raw);
+        validate_device_filename(filename)?;
         let target_path = target_dir.join(filename);
 
         let mut download = self
@@ -278,6 +280,7 @@ impl DeviceBackend for MtpBackend {
     }
 
     fn mkdir(&mut self, name: &str) -> Result<()> {
+        validate_device_filename(name)?;
         let parent = self.current_handle();
         self.rt
             .block_on(self.storage.create_folder(parent, name))
@@ -301,6 +304,7 @@ impl DeviceBackend for MtpBackend {
         if !self.device.supports_rename() {
             anyhow::bail!("device does not support renaming");
         }
+        validate_device_filename(new_name)?;
         let handle_raw: u64 = entry_id
             .parse()
             .with_context(|| format!("invalid object handle: {entry_id}"))?;

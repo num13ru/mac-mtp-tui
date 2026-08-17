@@ -4,6 +4,7 @@
 mod app;
 mod backend;
 mod config;
+mod filename;
 mod inspector;
 mod types;
 mod ui;

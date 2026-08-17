@@ -38,9 +38,9 @@ Several choices align well with the crabbook guidance and should be preserved:
 
 ## Priority summary
 
-| Priority | Improvement | Main risk addressed | Works when / caveat |
-|---|---|---|---|
-| P0 | Validate device filenames before joining them to a host directory | Path escape or unintended overwrite | Validation must follow the target OS path rules and accept exactly one normal filename component |
+| Priority | Improvement | Main risk addressed | Works when / caveat | Status |
+|---|---|---|---|---|
+| P0 | Validate device filenames before joining them to a host directory | Path escape or unintended overwrite | Validation must follow the target OS path rules and accept exactly one normal filename component | ✅ Completed 2026-08-18 |
 | P0 | Stage host downloads and commit only after success | Truncated/partial destination after a failed pull | Atomic commit requires a temporary file on the same filesystem; replacement semantics differ by OS |
 | P0 | Stream uploads without collecting the entire file | Memory proportional to file size; repeated read-error loop | The `mtp-rs` stream must be able to own or safely borrow the reader for the upload duration |
 | P0 | Redesign overwrite push as a recoverable operation | Existing device file is deleted before upload succeeds | Strong guarantees depend on device support for temporary upload, rename, and cleanup |
@@ -55,7 +55,9 @@ Several choices align well with the crabbook guidance and should be preserved:
 
 ### P0 — Treat a device filename as untrusted input
 
-`pull_file` constructs a local path with `target_dir.join(filename)` and immediately creates it (`src/backend.rs:250-264`). There is no check that `filename` is a single normal path component.
+**Status: Completed 2026-08-18**
+
+The `pull_file` function constructs a local path with `target_dir.join(filename)` and immediately creates it (`src/backend.rs:250-264`). There is no check that `filename` is a single normal path component.
 
 If an MTP device can report a name such as `../outside`, an absolute path, or a platform-specific prefix/separator form, joining can address a location outside the selected host directory. Even if common devices sanitize names, the backend boundary should enforce this invariant locally.
 
@@ -68,6 +70,8 @@ Recommended invariant:
 5. Keep the trusted local target as a `PathBuf`; use the display name only for UI text.
 
 This works when the intended product behavior is “download into the current host directory under one filename.” If preserving arbitrary device names is required, define an explicit escaping/mapping scheme and collision policy instead of passing them directly to the host filesystem.
+
+**Implementation:** Added `validate_device_filename(&str) -> Result<&str>` function in `src/backend.rs`. The function rejects empty strings, control characters (0x00-0x1F), backslashes (cross-platform safety), path traversal (`..`), absolute paths (`/`), current directory references (`.`), and embedded path separators. The validation is called in `pull_file`, `mkdir`, and `rename` before any file operations.
 
 ### P0 — Make pulls failure-atomic where the filesystem permits
 
