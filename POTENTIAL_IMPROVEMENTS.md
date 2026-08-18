@@ -71,7 +71,7 @@ Recommended invariant:
 
 This works when the intended product behavior is “download into the current host directory under one filename.” If preserving arbitrary device names is required, define an explicit escaping/mapping scheme and collision policy instead of passing them directly to the host filesystem.
 
-**Implementation:** Added `validate_device_filename(&str) -> Result<&str>` function in `src/backend.rs`. The function rejects empty strings, control characters (0x00-0x1F), backslashes (cross-platform safety), path traversal (`..`), absolute paths (`/`), current directory references (`.`), and embedded path separators. The validation is called in `pull_file`, `mkdir`, and `rename` before any file operations.
+**Implementation:** Added `validate_device_filename(&str) -> Result<&str>` function in `src/filename.rs`. The function rejects empty strings, control characters (0x00-0x1F), backslashes (cross-platform safety), path traversal (`..`), absolute paths (`/`), current directory references (`.`), and embedded path separators. The validation is called in `pull_file`, `mkdir`, and `rename` before any file operations.
 
 ### P0 — Make pulls failure-atomic where the filesystem permits
 

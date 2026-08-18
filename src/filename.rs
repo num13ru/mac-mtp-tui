@@ -13,6 +13,9 @@ use anyhow::Result;
 /// - Absolute paths (root or prefix components)
 /// - Current directory references (`.`)
 /// - Embedded path separators
+/// - On Windows: characters illegal in Windows filenames (`* ? " < > |`),
+///   the `:` stream separator (NTFS alternate data streams), names ending
+///   in a dot or space, and reserved device names
 ///
 /// Returns the original filename if it passes all checks, otherwise returns
 /// an error describing why the filename was rejected.
@@ -61,7 +64,63 @@ pub fn validate_device_filename(filename: &str) -> Result<&str> {
         anyhow::bail!("filename cannot contain path separators");
     }
 
+    // On Windows, enforce extra rules that go beyond path structure.
+    #[cfg(windows)]
+    reject_windows_unsafe_name(filename)?;
+
     Ok(filename)
+}
+
+/// Windows-specific filename rules.
+///
+/// Windows filenames have restrictions beyond path structure:
+///
+/// - `* ? " < > |` are illegal in file names.
+/// - `:` addresses NTFS alternate data streams, so a name such as
+///   `victim.txt:stream` must not be treated as a plain filename.
+/// - Names ending in a dot or space are silently normalized by the Windows
+///   APIs, which can alias a validated name to a different existing file
+///   (or, after normalization, become empty).
+/// - The base name `CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`, and
+///   `LPT1`-`LPT9` is a reserved device name regardless of extension and
+///   case.
+///
+/// The helper is compiled on all hosts so it can be unit-tested everywhere,
+/// but is only enforced by `validate_device_filename` on Windows.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn reject_windows_unsafe_name(filename: &str) -> Result<()> {
+    if filename
+        .chars()
+        .any(|c| matches!(c, '*' | '?' | '"' | '<' | '>' | '|' | ':'))
+    {
+        anyhow::bail!("filename contains a character that is not allowed on Windows");
+    }
+
+    // Windows silently strips trailing dots and spaces when resolving names,
+    // so reject them to keep the validated name exactly as written.
+    let stripped = filename.trim_end_matches(['.', ' ']);
+    if stripped.is_empty() {
+        anyhow::bail!("filename reduces to an empty name on Windows");
+    }
+    if !filename.ends_with(stripped) {
+        anyhow::bail!("filename cannot end with a dot or a space on Windows");
+    }
+
+    // Reserved device names are invalid with any extension and any case.
+    let stem = filename
+        .split('.')
+        .next()
+        .unwrap_or(filename)
+        .to_ascii_uppercase();
+    const RESERVED_NAMES: [&str; 22] = [
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+    if RESERVED_NAMES.contains(&stem.as_str()) {
+        anyhow::bail!("filename is a reserved Windows device name");
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -171,5 +230,85 @@ mod tests {
         assert!(
             msg.contains("separator") || msg.contains("exactly one") || msg.contains("additional")
         );
+    }
+
+    // The Windows rules are compiled on all hosts so these tests run in
+    // cross-platform CI; on Windows they are also exercised through
+    // `validate_device_filename` itself.
+
+    #[test]
+    fn windows_forbidden_characters_and_data_streams() {
+        // NTFS alternate data stream separators must be rejected.
+        assert!(reject_windows_unsafe_name("victim.txt:stream").is_err());
+        assert!(reject_windows_unsafe_name("file:name.txt").is_err());
+        assert!(reject_windows_unsafe_name("a:b").is_err());
+
+        // Characters illegal in Windows filenames.
+        for name in ["a*b", "a?b", "a\"b", "a<b", "a>b", "a|b"] {
+            assert!(
+                reject_windows_unsafe_name(name).is_err(),
+                "{name} should be rejected"
+            );
+        }
+
+        // Plain names are fine.
+        assert!(reject_windows_unsafe_name("normal.txt").is_ok());
+        assert!(reject_windows_unsafe_name("track 12").is_ok());
+    }
+
+    #[test]
+    fn windows_trailing_dots_and_spaces() {
+        // Trailing dots/spaces would be silently normalized away by the
+        // Windows APIs, aliasing the name to a different existing file.
+        assert!(reject_windows_unsafe_name("victim.txt.").is_err());
+        assert!(reject_windows_unsafe_name("victim.txt ").is_err());
+        assert!(reject_windows_unsafe_name("victim.txt. ").is_err());
+
+        // Names that normalize to empty are rejected as well.
+        assert!(reject_windows_unsafe_name("...").is_err());
+        assert!(reject_windows_unsafe_name(".").is_err());
+
+        // Interior spaces and dots are legitimate.
+        assert!(reject_windows_unsafe_name("my file.txt").is_ok());
+        assert!(reject_windows_unsafe_name("archive.v2.tar").is_ok());
+    }
+
+    #[test]
+    fn windows_reserved_device_names() {
+        for name in [
+            "CON", "con", "Con.txt", "PRN.log", "aux", "NUL", "COM1", "com9", "Com3.bin", "LPT1",
+            "lpt9", "LPT8.txt",
+        ] {
+            assert!(
+                reject_windows_unsafe_name(name).is_err(),
+                "{name} should be rejected"
+            );
+        }
+
+        // Similar-but-not-reserved names must still be accepted.
+        assert!(reject_windows_unsafe_name("COM10.txt").is_ok());
+        assert!(reject_windows_unsafe_name("CONSOLE.txt").is_ok());
+        assert!(reject_windows_unsafe_name("NULLED.txt").is_ok());
+    }
+
+    // Windows-targeted: on Windows, the full validator must enforce the
+    // same rules end to end before any join happens.
+    #[cfg(windows)]
+    #[test]
+    fn validate_device_filename_enforces_windows_rules_on_windows() {
+        for name in [
+            "victim.txt:stream",
+            "a|b",
+            "victim.txt.",
+            "victim.txt ",
+            "CON",
+            "nul.txt",
+        ] {
+            assert!(
+                validate_device_filename(name).is_err(),
+                "{name} should be rejected"
+            );
+        }
+        assert!(validate_device_filename("normal.txt").is_ok());
     }
 }
