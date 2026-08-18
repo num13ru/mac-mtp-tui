@@ -38,6 +38,21 @@ pub fn validate_device_filename(filename: &str) -> Result<&str> {
         anyhow::bail!("filename cannot contain backslashes");
     }
 
+    // Reject parent directory traversal before parsing, so traversal names
+    // are reported as traversal rather than as generic separators.
+    // (`..` can never be a valid single-component filename.)
+    if filename == ".." || filename.contains("../") {
+        anyhow::bail!("filename cannot contain parent directory references");
+    }
+
+    // Reject any forward slash before parsing. `Path::components()`
+    // normalizes away trailing separators and `.` components, so names
+    // such as `file/` or `file/.` would otherwise be accepted despite the
+    // single-filename invariant and then passed to MTP rename/mkdir.
+    if filename.contains('/') {
+        anyhow::bail!("filename cannot contain path separators");
+    }
+
     // Parse the path and verify it has exactly one Normal component
     let path = Path::new(filename);
     let mut components = path.components();
@@ -208,6 +223,13 @@ mod tests {
 
         // Backslash is rejected for cross-platform safety (path separator on Windows)
         assert!(validate_device_filename("dir\\file.txt").is_err());
+
+        // Trailing separators and trailing `.` are normalized away by
+        // Path::components() and must still be rejected: the raw name is
+        // what gets sent to MTP rename/mkdir.
+        assert!(validate_device_filename("file/").is_err());
+        assert!(validate_device_filename("file//").is_err());
+        assert!(validate_device_filename("file/.").is_err());
     }
 
     #[test]
