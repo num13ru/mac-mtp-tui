@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use bytes::Bytes;
 use mtp_rs::mtp::{ListingItem, MtpDevice, NewObjectInfo, ObjectHandle, Storage};
 
+use crate::filename::{is_safe_download_target, validate_device_filename};
 use crate::inspector::{INSPECTOR_PROPERTIES, format_datetime, format_object_format, prop_name};
 use crate::types::{DeviceEntry, DeviceEntryKind, InspectorData, InspectorProperty};
 use crate::ui::format_size;
@@ -248,11 +249,24 @@ impl DeviceBackend for MtpBackend {
     }
 
     fn pull_file(&mut self, entry_id: &str, filename: &str, target_dir: &Path) -> Result<()> {
+        // Defense in depth: the UI validates the device name before joining
+        // it to the target directory, but the backend must not trust its
+        // callers, since the name is device-controlled.
         let handle_raw: u64 = entry_id
             .parse()
             .with_context(|| format!("invalid object handle: {entry_id}"))?;
         let handle = ObjectHandle(handle_raw);
+        validate_device_filename(filename)?;
         let target_path = target_dir.join(filename);
+        // Refuse to write through a symlink: `File::create` follows links and
+        // would truncate (or create) the target, which may live outside
+        // `target_dir`. Dangling symlinks also hide behind `Path::exists()`.
+        if !is_safe_download_target(&target_path) {
+            anyhow::bail!(
+                "refusing to write through an existing non-regular file: {}",
+                target_path.display()
+            );
+        }
 
         let mut download = self
             .rt
@@ -278,6 +292,7 @@ impl DeviceBackend for MtpBackend {
     }
 
     fn mkdir(&mut self, name: &str) -> Result<()> {
+        validate_device_filename(name)?;
         let parent = self.current_handle();
         self.rt
             .block_on(self.storage.create_folder(parent, name))
@@ -301,6 +316,7 @@ impl DeviceBackend for MtpBackend {
         if !self.device.supports_rename() {
             anyhow::bail!("device does not support renaming");
         }
+        validate_device_filename(new_name)?;
         let handle_raw: u64 = entry_id
             .parse()
             .with_context(|| format!("invalid object handle: {entry_id}"))?;
