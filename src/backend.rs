@@ -249,6 +249,9 @@ impl DeviceBackend for MtpBackend {
     }
 
     fn pull_file(&mut self, entry_id: &str, filename: &str, target_dir: &Path) -> Result<()> {
+        // Defense in depth: the UI validates the device name before joining
+        // it to the target directory, but the backend must not trust its
+        // callers, since the name is device-controlled.
         let handle_raw: u64 = entry_id
             .parse()
             .with_context(|| format!("invalid object handle: {entry_id}"))?;
