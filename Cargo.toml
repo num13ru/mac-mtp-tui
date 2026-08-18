@@ -18,3 +18,4 @@ unicode-width = "0.2"
 
 [dev-dependencies]
 rusb = "0.9.4"
+tempfile = "3"

@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use bytes::Bytes;
 use mtp_rs::mtp::{ListingItem, MtpDevice, NewObjectInfo, ObjectHandle, Storage};
 
-use crate::filename::validate_device_filename;
+use crate::filename::{is_safe_download_target, validate_device_filename};
 use crate::inspector::{INSPECTOR_PROPERTIES, format_datetime, format_object_format, prop_name};
 use crate::types::{DeviceEntry, DeviceEntryKind, InspectorData, InspectorProperty};
 use crate::ui::format_size;
@@ -255,6 +255,15 @@ impl DeviceBackend for MtpBackend {
         let handle = ObjectHandle(handle_raw);
         validate_device_filename(filename)?;
         let target_path = target_dir.join(filename);
+        // Refuse to write through a symlink: `File::create` follows links and
+        // would truncate (or create) the target, which may live outside
+        // `target_dir`. Dangling symlinks also hide behind `Path::exists()`.
+        if !is_safe_download_target(&target_path) {
+            anyhow::bail!(
+                "refusing to write through an existing non-regular file: {}",
+                target_path.display()
+            );
+        }
 
         let mut download = self
             .rt

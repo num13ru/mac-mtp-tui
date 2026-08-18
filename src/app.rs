@@ -11,6 +11,7 @@ use ratatui::DefaultTerminal;
 
 use crate::backend::MtpBackend;
 use crate::config::Config;
+use crate::filename::is_safe_download_target;
 use crate::types::{
     ActiveDialog, ConfirmAction, ConfirmDialog, DeviceCache, DeviceEntry, DeviceEntryKind,
     DeviceState, FocusPane, HostEntry, InfoDialog, ListingMsg, LoadingState, PaneState,
@@ -621,7 +622,11 @@ impl App {
         let entry_id = entry.id.clone();
         let filename = entry.name.clone();
 
-        if self.host_cwd.join(&filename).exists() {
+        let target_path = self.host_cwd.join(&filename);
+        // Prompt on an existing regular file, and also on any non-regular
+        // entry (including dangling symlinks, which `exists()` would miss):
+        // writing through them would escape the selected directory.
+        if self.host_cwd.join(&filename).exists() || !is_safe_download_target(&target_path) {
             self.dialog = ActiveDialog::Confirm(ConfirmDialog {
                 title: "Overwrite?".into(),
                 message: format!(

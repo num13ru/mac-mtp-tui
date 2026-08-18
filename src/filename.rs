@@ -123,6 +123,22 @@ fn reject_windows_unsafe_name(filename: &str) -> Result<()> {
     Ok(())
 }
 
+/// Checks whether `path` is a safe target for a host download.
+///
+/// A path is safe when it either does not exist at all, or exists as a
+/// regular file. Symlinks are rejected even when dangling, because
+/// `File::create` follows them and would write to (or create) the link
+/// target, which may lie outside the selected directory. Dangling symlinks
+/// additionally slip past `Path::exists()`, hiding them from overwrite
+/// prompts, so they must be caught here.
+pub fn is_safe_download_target(path: &Path) -> bool {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata.file_type().is_file(),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => true,
+        Err(_) => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -293,6 +309,49 @@ mod tests {
 
     // Windows-targeted: on Windows, the full validator must enforce the
     // same rules end to end before any join happens.
+    #[test]
+    fn is_safe_download_target_rejects_symlinks() {
+        use std::io::Write;
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let outside = dir.path().join("outside.txt");
+        let outside_name = outside.display().to_string();
+        {
+            let mut f = std::fs::File::create(&outside).expect("create outside");
+            writeln!(f, "outside").expect("write outside");
+        }
+
+        // No entry yet: safe.
+        let missing = dir.path().join("missing.txt");
+        assert!(is_safe_download_target(&missing));
+
+        // Regular file: safe (overwrite is handled by the UI prompt).
+        let regular = dir.path().join("regular.txt");
+        std::fs::write(&regular, b"data").expect("write regular");
+        assert!(is_safe_download_target(&regular));
+
+        // Live symlink: rejected, even though it points inside the directory
+        // here; the target could equally well be outside it.
+        let live_link = dir.path().join("live.lnk");
+        symlink("regular.txt", &live_link).expect("live symlink");
+        assert!(!is_safe_download_target(&live_link));
+
+        // Dangling symlink: rejected (Path::exists() would report false).
+        let dangling = dir.path().join("dangling.lnk");
+        symlink("no-such-target", &dangling).expect("dangling symlink");
+        assert!(!is_safe_download_target(&dangling));
+        assert!(!dangling.exists());
+
+        // Symlink to an absolute path outside the directory: rejected.
+        let absolute_link = dir.path().join("absolute.lnk");
+        symlink(outside_name, &absolute_link).expect("absolute symlink");
+        assert!(!is_safe_download_target(&absolute_link));
+
+        // Directory: rejected.
+        assert!(!is_safe_download_target(dir.path()));
+    }
+
     #[cfg(windows)]
     #[test]
     fn validate_device_filename_enforces_windows_rules_on_windows() {
