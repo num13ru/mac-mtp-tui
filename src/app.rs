@@ -11,6 +11,7 @@ use ratatui::DefaultTerminal;
 
 use crate::backend::MtpBackend;
 use crate::config::Config;
+use crate::filename::{is_safe_download_target, validate_device_filename};
 use crate::types::{
     ActiveDialog, ConfirmAction, ConfirmDialog, DeviceCache, DeviceEntry, DeviceEntryKind,
     DeviceState, FocusPane, HostEntry, InfoDialog, ListingMsg, LoadingState, PaneState,
@@ -621,7 +622,20 @@ impl App {
         let entry_id = entry.id.clone();
         let filename = entry.name.clone();
 
-        if self.host_cwd.join(&filename).exists() {
+        // Validate the device-controlled name before joining it to the host
+        // directory: an absolute or parent-relative name would otherwise be
+        // probed (and shown in the overwrite prompt) outside the selected
+        // directory.
+        if let Err(e) = validate_device_filename(&filename) {
+            self.status = format!("Cannot pull \"{filename}\": {e:#}");
+            return Ok(());
+        }
+
+        let target_path = self.host_cwd.join(&filename);
+        // Prompt on an existing regular file, and also on any non-regular
+        // entry (including dangling symlinks, which `exists()` would miss):
+        // writing through them would escape the selected directory.
+        if self.host_cwd.join(&filename).exists() || !is_safe_download_target(&target_path) {
             self.dialog = ActiveDialog::Confirm(ConfirmDialog {
                 title: "Overwrite?".into(),
                 message: format!(
